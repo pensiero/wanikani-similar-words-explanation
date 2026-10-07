@@ -33,6 +33,7 @@ const items = [
   vocab(7, '放送する', ['To Broadcast Something'], { aux: [{ meaning: 'To Air', type: 'whitelist' }] }),
   vocab(8, '伝える', ['To Convey'], { aux: [{ meaning: 'To Broadcast', type: 'blacklist' }], synonyms: ['to air'] }),
   { ...vocab(9, '隠し', ['Important']), data: { ...vocab(9, '隠し', ['Important']).data, hidden_at: '2020-01-01' } },
+  vocab(10, '必要する', ['Necessary']), // fake する-form of 必要: same word, must not be a candidate
 ];
 
 test('normalizeMeaning collapses WK phrasing variants', () => {
@@ -92,28 +93,30 @@ test('buildPrompt grounds readings and meanings and sets the language', () => {
   const words = [items[0], items[1]].map(core.wordInfo);
   const p = core.buildPrompt(words, 'Italian');
   assert.match(p.user, /必要 \(ひつよう\): WaniKani meanings: Necessary, Needed, Essential/);
-  assert.match(p.system, /Write every explanation in Italian/);
+  assert.match(p.system, /Write all explanations and translations in Italian/);
   assert.equal(p.schema, core.RESULT_SCHEMA);
+  assert.match(p.user, /"gist"/);
   const chat = core.buildChatPrompt(words, 'English');
-  assert.match(chat, /### When to choose which/);
-  assert.ok(encodeURIComponent(chat).length < 6000, 'prefill URL stays reasonably short');
+  assert.equal(chat, "What's the difference between 必要 (ひつよう) and 重要 (じゅうよう)? I'm an advanced learner of Japanese and keep mixing them up. Please answer in English.");
+  assert.ok(encodeURIComponent(chat).length < 2000, 'prefill URL stays short');
 });
 
-test('parseResult accepts fenced JSON, coerces and trims lists', () => {
+test('parseResult accepts fenced JSON, coerces and drops empty bits', () => {
   const raw = '```json\n' + JSON.stringify({
+    gist: '必要 is needed, 重要 matters.',
     words: [
-      { word: '必要', reading: 'ひつよう', core_meaning: 'needed', register: 'Neutral', register_note: '', contexts: ['a', 'b', 'c', 'd'], collocations: ['必要がある'], example: { ja: '水が必要だ。', translation: 'Water is needed.' } },
-      { word: '重要', reading: 'じゅうよう', core_meaning: 'important', register: 'formal', contexts: [], collocations: [] },
+      { word: '必要', reading: 'ひつよう', gloss: 'needed', register: 'Neutral', note: 'Requirement.', expressions: [{ ja: '必要不可欠', en: 'indispensable' }, { ja: '', en: 'x' }, { ja: 'a', en: '' }, { ja: 'b', en: '' }, { ja: 'c', en: '' }] },
+      { word: '重要', reading: 'じゅうよう', gloss: 'important', register: 'formal' },
     ],
-    choose: [{ word: '必要', when: 'need' }, { word: '', when: 'x' }],
-    rule_of_thumb: 'Need vs matter.',
-    common_mistake: '',
+    scene: { setup: 'Packing', lines: [{ word: '必要', ja: '傘が必要だ。', en: 'I need an umbrella.' }, { word: '重要', ja: '', en: 'x' }] },
   }) + '\n```';
   const r = core.parseResult(raw);
+  assert.equal(r.gist, '必要 is needed, 重要 matters.');
   assert.equal(r.words[0].register, 'neutral');
-  assert.equal(r.words[0].contexts.length, 3);
-  assert.deepEqual(r.words[1].example, { ja: '', translation: '' });
-  assert.equal(r.choose.length, 1);
+  assert.equal(r.words[0].expressions.length, 3);
+  assert.deepEqual(r.words[1].expressions, []);
+  assert.equal(r.scene.lines.length, 1);
+  assert.equal(r.watch_out, '');
   assert.throws(() => core.parseResult('not json'), /valid JSON/);
   assert.throws(() => core.parseResult('{"words":[{"word":"a"}]}'), /incomplete/);
 });

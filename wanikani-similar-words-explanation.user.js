@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WaniKani Similar Words Explanation
 // @namespace    https://github.com/pensiero/wanikani-similar-words-explanation
-// @version      0.2.0
+// @version      0.3.0
 // @description  Lists vocab you have learned that is easy to confuse with the current word (shared meanings + Kanji Search groups) and, on click, asks an LLM how they differ. Answers are cached in your browser.
 // @author       pensiero
 // @license      MIT
@@ -41,7 +41,7 @@
 
   // Bump whenever the prompt or the result schema changes: it is part of the
   // cache key, so old answers stop matching instead of rendering wrongly.
-  const PROMPT_VERSION = 2;
+  const PROMPT_VERSION = 3;
 
   const LEARNED_MIN_SRS_STAGE = 1; // Apprentice 1: confusion starts at first sight
   const MAX_CANDIDATES = 8;
@@ -51,9 +51,13 @@
 
   const REGISTERS = ['casual', 'neutral', 'formal', 'written', 'literary'];
 
+  // Contrast-first: one gist, a short note per word, one shared scene. Every field
+  // must add something the others don't; v1/v2 had four fields restating the same
+  // distinction and a mandatory "common mistake" the model often had to invent.
   const RESULT_SCHEMA = {
     type: 'object',
     properties: {
+      gist: { type: 'string' },
       words: {
         type: 'array',
         items: {
@@ -61,32 +65,39 @@
           properties: {
             word: { type: 'string' },
             reading: { type: 'string' },
-            core_meaning: { type: 'string' },
+            gloss: { type: 'string' },
             register: { type: 'string', enum: REGISTERS },
-            register_note: { type: 'string' },
-            contexts: { type: 'array', items: { type: 'string' } },
-            collocations: { type: 'array', items: { type: 'string' } },
-            example: {
-              type: 'object',
-              properties: { ja: { type: 'string' }, translation: { type: 'string' } },
-              required: ['ja', 'translation'],
+            note: { type: 'string' },
+            expressions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: { ja: { type: 'string' }, en: { type: 'string' } },
+                required: ['ja', 'en'],
+              },
             },
           },
-          required: ['word', 'reading', 'core_meaning', 'register', 'register_note', 'contexts', 'collocations', 'example'],
+          required: ['word', 'reading', 'gloss', 'register', 'note', 'expressions'],
         },
       },
-      choose: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: { word: { type: 'string' }, when: { type: 'string' } },
-          required: ['word', 'when'],
+      scene: {
+        type: 'object',
+        properties: {
+          setup: { type: 'string' },
+          lines: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { word: { type: 'string' }, ja: { type: 'string' }, en: { type: 'string' } },
+              required: ['word', 'ja', 'en'],
+            },
+          },
         },
+        required: ['setup', 'lines'],
       },
-      rule_of_thumb: { type: 'string' },
-      common_mistake: { type: 'string' },
+      watch_out: { type: 'string' },
     },
-    required: ['words', 'choose', 'rule_of_thumb', 'common_mistake'],
+    required: ['gist', 'words', 'scene', 'watch_out'],
   };
 
   // "To Broadcast Something" and "broadcast" must collide; "Watch (Clock)" and "watch" too.
@@ -160,10 +171,12 @@
     const item = index.byId.get(id);
     if (!item) return [];
     const found = new Map();
+    // 期待 vs 期待する (or a kana duplicate) is the same word, not a confusable one.
+    const stem = (characters) => characters.replace(/する$/, '');
     const entry = (otherId) => {
       const other = index.byId.get(otherId);
       if (otherId === id || !other || !index.learned.has(otherId)) return null;
-      if (other.data.characters === item.data.characters) return null;
+      if (stem(other.data.characters) === stem(item.data.characters)) return null;
       if (!found.has(otherId)) found.set(otherId, { id: otherId, shared: [], ksGroupSize: null });
       return found.get(otherId);
     };
@@ -213,60 +226,46 @@
       .join('\n');
   }
 
-  function lengthRules(language) {
-    return [
-      'core_meaning: at most 10 words.',
-      `register: one of ${REGISTERS.join(', ')}; register_note: at most 8 words on how its register or tone differs from the other words (never a generic note like "common in everyday use").`,
-      'contexts: up to 3 short phrases naming typical situations or subjects.',
-      'collocations: up to 3 common Japanese collocations, in Japanese only, preferably ones that show the difference; only use pairings native speakers actually use.',
-      `example: one natural sentence of at most 30 Japanese characters using the word, with a ${language} translation.`,
-      'choose: one entry per word, saying in one line when to choose it over the others.',
-      'rule_of_thumb: one sentence, at most 20 words.',
-      'common_mistake: at most 25 words; include a wrong → right Japanese pair when possible. The wrong version must be genuinely wrong or clearly unnatural, not merely less common.',
-      'Keep all explanation text under 180 words in total.',
-    ];
-  }
-
   // Words must be sorted by id by the caller so equal sets give equal prompts.
   function buildPrompt(words, language) {
     const lang = normalizeLanguage(language);
     const system = [
-      'You are a precise Japanese teacher explaining near-synonyms to an advanced learner.',
-      'Be concrete and brief. Use the readings given; never invent readings.',
-      'If the words are interchangeable in some contexts, say so instead of inventing differences.',
-      'Prefer common, natural usage over rare dictionary senses. If a usage belongs to a near-synonym outside this list (e.g. 昇る for the sun), do not attribute it to these words.',
-      'Proofread: no typos, and every Japanese phrase must be grammatical and natural (except the deliberately wrong half of the common mistake).',
-      `Write every explanation in ${lang}. Keep Japanese words, collocations and example sentences in Japanese.`,
+      'You are a Japanese teacher who explains near-synonyms to an advanced learner the way a good tutor talks: plainly, concretely, contrast first.',
+      'Use the readings given; never invent readings. Prefer common, natural usage over rare dictionary senses.',
+      'Do not attribute to these words a usage that belongs to a near-synonym outside this list.',
+      'Each field must add something new. Never restate the gist in the notes, or a note in another note.',
+      'If the words overlap or are interchangeable in some contexts, say so. If one word is not really a near-synonym of the others, say so in the gist rather than forcing a contrast.',
+      'Every Japanese phrase must be grammatical, natural and commonly used. Translations must be natural, not word-for-word. Proofread for typos.',
+      `Write all explanations and translations in ${lang}; keep Japanese words, expressions and sentences in Japanese.`,
     ].join('\n');
     const user = [
       'Compare these Japanese words that a learner keeps confusing:',
       describeWords(words),
       '',
       'Respond with JSON only, in this shape:',
-      '{"words":[{"word":"","reading":"","core_meaning":"","register":"","register_note":"","contexts":[],"collocations":[],"example":{"ja":"","translation":""}}],"choose":[{"word":"","when":""}],"rule_of_thumb":"","common_mistake":""}',
+      '{"gist":"","words":[{"word":"","reading":"","gloss":"","register":"","note":"","expressions":[{"ja":"","en":""}]}],"scene":{"setup":"","lines":[{"word":"","ja":"","en":""}]},"watch_out":""}',
       '',
-      'Rules:',
+      'Fields:',
+      '- gist: one sentence (at most 30 words) that contrasts all the words at once, e.g. "期待 is what you hope will happen, 予想 what you think will happen, 想定 what you assume so you can plan for it."',
       '- words: one entry per word above, in the same order.',
-      ...lengthRules(lang).map((r) => `- ${r}`),
+      '  - gloss: at most 6 words.',
+      `  - register: one of ${REGISTERS.join(', ')}; use neutral unless the register really differs.`,
+      '  - note: 1–2 sentences (at most 40 words) on its nuance and what it typically applies to (people, objects, plans, feelings…). Mention register only if notable.',
+      '  - expressions: 2–3 common set phrases, compounds or collocations that best show this word\'s territory (e.g. 期待外れ, 予想外, 想定内), each with a short gloss in en.',
+      '- scene: one everyday situation in which every word appears; setup: at most 12 words describing it; lines: one natural sentence per word (at most 25 Japanese characters) with a natural translation in en. If one situation cannot fit all words naturally, use closely related moments.',
+      '- watch_out: the single most useful extra contrast or trap (e.g. 予想外 "didn\'t see it coming" vs 想定外 "not in our plan", or a different word the learner may actually mean), at most 35 words. Leave it empty rather than inventing one.',
+      '- Keep the whole answer under 200 words of explanation.',
     ].join('\n');
     return { system, user, schema: RESULT_SCHEMA };
   }
 
-  // Same content spec for pasting into a chat UI, which a human reads as Markdown.
+  // For ChatGPT and other frontier chat models: just the question. They answer it
+  // well on their own, and a free-form answer reads better than our template.
   function buildChatPrompt(words, language) {
     const lang = normalizeLanguage(language);
-    return [
-      'You are a precise Japanese teacher. Compare these Japanese words that I, an advanced learner, keep confusing:',
-      describeWords(words),
-      '',
-      `Answer in ${lang} (keep Japanese words and examples in Japanese), formatted in Markdown with exactly these sections:`,
-      '- one "### <word> (<reading>)" section per word with bullets: Core meaning, Register, Contexts, Collocations, Example (Japanese + translation)',
-      '- "### When to choose which", "### Rule of thumb", "### Common mistake"',
-      '',
-      'Limits:',
-      ...lengthRules(lang).map((r) => `- ${r}`),
-      'If the words are interchangeable in some contexts, say so instead of inventing differences.',
-    ].join('\n');
+    const list = words.map((w) => `${w.characters} (${w.readings[0]})`);
+    const joined = list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}` : list[0];
+    return `What's the difference between ${joined}? I'm an advanced learner of Japanese and keep mixing them up. Please answer in ${lang}.`;
   }
 
   // Tolerant: models sometimes wrap JSON in fences or drop optional bits.
@@ -279,27 +278,27 @@
       throw new Error('The model did not return valid JSON.');
     }
     const str = (v) => (typeof v === 'string' ? v.trim() : '');
-    const strList = (v) => (Array.isArray(v) ? v.map(str).filter(Boolean).slice(0, 3) : []);
-    const words = (Array.isArray(obj && obj.words) ? obj.words : [])
+    const list = (v) => (Array.isArray(v) ? v.filter((x) => x && typeof x === 'object') : []);
+    const words = list(obj && obj.words)
       .map((w) => ({
         word: str(w.word),
         reading: str(w.reading),
-        core_meaning: str(w.core_meaning),
+        gloss: str(w.gloss),
         register: str(w.register).toLowerCase(),
-        register_note: str(w.register_note),
-        contexts: strList(w.contexts),
-        collocations: strList(w.collocations),
-        example: { ja: str(w.example && w.example.ja), translation: str(w.example && w.example.translation) },
+        note: str(w.note),
+        expressions: list(w.expressions).map((e) => ({ ja: str(e.ja), en: str(e.en) })).filter((e) => e.ja).slice(0, 3),
       }))
       .filter((w) => w.word);
     if (words.length < 2) throw new Error('The model returned an incomplete comparison.');
+    const scene = (obj.scene && typeof obj.scene === 'object') ? obj.scene : {};
     return {
+      gist: str(obj.gist),
       words,
-      choose: (Array.isArray(obj.choose) ? obj.choose : [])
-        .map((c) => ({ word: str(c && c.word), when: str(c && c.when) }))
-        .filter((c) => c.word && c.when),
-      rule_of_thumb: str(obj.rule_of_thumb),
-      common_mistake: str(obj.common_mistake),
+      scene: {
+        setup: str(scene.setup),
+        lines: list(scene.lines).map((l) => ({ word: str(l.word), ja: str(l.ja), en: str(l.en) })).filter((l) => l.ja),
+      },
+      watch_out: str(obj.watch_out),
     };
   }
 
@@ -732,12 +731,13 @@
       status.replaceChildren('Prompt copied. If ChatGPT does not prefill it, paste it there.');
     }
 
+    // Reading order mirrors how a tutor explains: the one-line contrast, then each
+    // word, then all words in one scene, then the one trap worth remembering.
     function renderResult(entry) {
       const r = entry.result;
-      const list = (label, items, lang) =>
-        items.length ? h('div', { class: 'wksw-field' }, h('span', { class: 'wksw-label' }, label), h('span', { lang }, items.join(' · '))) : null;
       const providerLabel = (PROVIDERS[entry.provider] || {}).label || entry.provider;
       result.replaceChildren(
+        r.gist && h('p', { class: 'wksw-gist' }, r.gist),
         h(
           'div',
           { class: 'wksw-words' },
@@ -750,20 +750,24 @@
                 { class: 'wksw-word-head' },
                 h('span', { lang: 'ja', class: 'wksw-ja' }, w.word),
                 h('span', { lang: 'ja', class: 'wksw-reading' }, w.reading),
-                w.register && h('span', { class: 'wksw-register', title: w.register_note }, w.register),
+                w.register && w.register !== 'neutral' && h('span', { class: 'wksw-register' }, w.register),
               ),
-              h('div', { class: 'wksw-core' }, w.core_meaning),
-              w.register_note && h('div', { class: 'wksw-muted' }, w.register_note),
-              list('Contexts', w.contexts),
-              list('Collocations', w.collocations, 'ja'),
-              w.example.ja && h('div', { class: 'wksw-example' }, h('div', { lang: 'ja' }, w.example.ja), h('div', { class: 'wksw-muted' }, w.example.translation)),
+              w.gloss && h('div', { class: 'wksw-gloss' }, w.gloss),
+              w.note && h('p', { class: 'wksw-note' }, w.note),
+              w.expressions.length &&
+                h('ul', { class: 'wksw-expressions' }, w.expressions.map((e) => h('li', {}, h('span', { lang: 'ja' }, e.ja), ' ', h('span', { class: 'wksw-muted' }, e.en)))),
             ),
           ),
         ),
-        r.choose.length && h('div', { class: 'wksw-choose' }, h('div', { class: 'wksw-label' }, 'When to choose which'),
-          h('ul', {}, r.choose.map((c) => h('li', {}, h('b', { lang: 'ja' }, c.word), ': ', c.when)))),
-        r.rule_of_thumb && h('p', { class: 'wksw-rule' }, h('b', {}, 'Rule of thumb: '), r.rule_of_thumb),
-        r.common_mistake && h('p', { class: 'wksw-mistake' }, h('b', {}, 'Common mistake: '), r.common_mistake),
+        r.scene.lines.length &&
+          h(
+            'div',
+            { class: 'wksw-scene' },
+            h('div', { class: 'wksw-label' }, 'In one scene'),
+            r.scene.setup && h('div', { class: 'wksw-muted' }, r.scene.setup),
+            h('ul', {}, r.scene.lines.map((l) => h('li', {}, h('span', { lang: 'ja' }, l.ja), h('span', { class: 'wksw-muted' }, l.en)))),
+          ),
+        r.watch_out && h('p', { class: 'wksw-watch' }, h('b', {}, 'Watch out: '), r.watch_out),
         h(
           'div',
           { class: 'wksw-footer' },
@@ -914,13 +918,17 @@
     .wksw-word-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
     .wksw-ja { font-size: 22px; }
     .wksw-register { margin-left: auto; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; }
-    .wksw-core { font-weight: 600; }
-    .wksw-field { margin-top: 4px; }
     .wksw-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; margin-right: 6px; }
-    .wksw-example { margin-top: 6px; padding-left: 8px; border-left: 3px solid #a100f1; }
-    .wksw-choose ul { margin: 2px 0 8px; padding-left: 18px; }
-    .wksw-rule, .wksw-mistake { margin: 4px 0; }
     .wksw-footer { margin-top: 8px; }
+    .wksw-gist { font-size: 16px; font-weight: 600; margin: 8px 0; }
+    .wksw-gloss { font-weight: 600; }
+    .wksw-note { margin: 4px 0 6px; }
+    .wksw-expressions { list-style: none; margin: 0; padding: 0; }
+    .wksw-expressions li { margin: 2px 0; }
+    .wksw-scene { margin: 8px 0; padding-left: 10px; border-left: 3px solid #a100f1; }
+    .wksw-scene ul { list-style: none; margin: 4px 0 0; padding: 0; }
+    .wksw-scene li { display: flex; flex-direction: column; margin-bottom: 4px; }
+    .wksw-watch { margin: 6px 0; }
     .wksw-spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid currentColor; border-right-color: transparent;
       border-radius: 50%; animation: wksw-spin 0.8s linear infinite; vertical-align: -1px; }
     @keyframes wksw-spin { to { transform: rotate(360deg); } }

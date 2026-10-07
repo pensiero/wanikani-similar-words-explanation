@@ -2,9 +2,10 @@
 
 A Tampermonkey userscript for [WaniKani](https://www.wanikani.com). For the vocab item you're looking at, it lists words **you have already learned** that are easy to confuse with it (必要 / 重要, 思う / 考える, 上る / 登る …). When you click, it asks an LLM how they differ and shows a short, consistently structured answer inside the item info:
 
-- reading, core meaning, register and typical contexts for each word
-- common collocations and one example sentence with a translation
-- when to choose which, a one-line rule of thumb, and one common mistake
+- a one-sentence gist that contrasts all the words at once
+- for each word: reading, short gloss, a note on its nuance, and 2–3 key expressions (期待外れ, 予想外, 想定内 …)
+- one everyday scene in which every word appears, with translations
+- one "watch out": the trap or extra contrast most worth remembering, when there is one
 
 It never calls an LLM by itself. Answers are cached in your browser, so revisiting a pair costs nothing. **Regenerate** asks again and replaces the cached answer.
 
@@ -36,7 +37,7 @@ The section sits under **Meaning** in the item info. In reviews it only appears 
 | OpenRouter | Pay per use (a fraction of a cent per comparison) | Key from [openrouter.ai/keys](https://openrouter.ai/keys). Set any model, e.g. `deepseek/deepseek-chat`. |
 | Ollama (local) | Free | You must allow extension origins: `OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*"`. Quality is noticeably weaker below ~14B models. |
 | Custom | – | Any OpenAI-compatible `/chat/completions` endpoint. Tampermonkey asks once to allow the host. |
-| **Ask ChatGPT** button | Free | No key needed. It copies the prompt and opens ChatGPT. ChatGPT's prefill parameter is unofficial; if it doesn't prefill, just paste. |
+| **Ask ChatGPT** button | Free | No key needed. It copies a plain question ("What's the difference between …?") and opens ChatGPT; frontier chat models answer best without a template. ChatGPT's prefill parameter is unofficial; if it doesn't prefill, just paste. |
 
 Your API key stays in Tampermonkey's storage. It is never logged, and it is sent only to the provider you chose.
 
