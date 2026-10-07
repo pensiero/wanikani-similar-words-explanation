@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WaniKani Similar Words Explanation
 // @namespace    https://github.com/pensiero/wanikani-similar-words-explanation
-// @version      0.3.0
+// @version      0.4.0
 // @description  Lists vocab you have learned that is easy to confuse with the current word (shared meanings + Kanji Search groups) and, on click, asks an LLM how they differ. Answers are cached in your browser.
 // @author       pensiero
 // @license      MIT
@@ -41,15 +41,18 @@
 
   // Bump whenever the prompt or the result schema changes: it is part of the
   // cache key, so old answers stop matching instead of rendering wrongly.
-  const PROMPT_VERSION = 3;
+  const PROMPT_VERSION = 4;
 
   const LEARNED_MIN_SRS_STAGE = 1; // Apprentice 1: confusion starts at first sight
-  const MAX_CANDIDATES = 8;
+  const MAX_CANDIDATES = 8; // learned words
+  const MAX_UNLEARNED = 4; // not-yet-learned words, listed after the learned ones
+  const UNLEARNED_MIN_SCORE = 15; // a Kanji Search group or 2+ shared meanings; one shared gloss is too noisy across all of WK
   const MAX_SELECTED = 3; // compared words besides the current one
   const KS_MAX_GROUP_SIZE = 6; // larger Kanji Search groups are enumerations (numbers, planets, days)
   const CACHE_PREFIX = 'cmp:';
 
   const REGISTERS = ['casual', 'neutral', 'formal', 'written', 'literary'];
+  const EVERYDAY = ['very common', 'common', 'occasional', 'rare']; // how often you hear it in conversation
 
   // Contrast-first: one gist, a short note per word, one shared scene. Every field
   // must add something the others don't; v1/v2 had four fields restating the same
@@ -67,7 +70,9 @@
             reading: { type: 'string' },
             gloss: { type: 'string' },
             register: { type: 'string', enum: REGISTERS },
+            everyday: { type: 'string', enum: EVERYDAY },
             note: { type: 'string' },
+            opposite: { type: 'object', properties: { ja: { type: 'string' }, en: { type: 'string' } }, required: ['ja', 'en'] },
             expressions: {
               type: 'array',
               items: {
@@ -76,8 +81,9 @@
                 required: ['ja', 'en'],
               },
             },
+            example: { type: 'object', properties: { ja: { type: 'string' }, en: { type: 'string' } }, required: ['ja', 'en'] },
           },
-          required: ['word', 'reading', 'gloss', 'register', 'note', 'expressions'],
+          required: ['word', 'reading', 'gloss', 'register', 'everyday', 'note', 'expressions', 'example'],
         },
       },
       scene: {
@@ -156,8 +162,7 @@
       const ids = byChars.get(item.data.characters) || [];
       ids.push(item.id);
       byChars.set(item.data.characters, ids);
-      if (!isLearned(item)) continue;
-      learned.add(item.id);
+      if (isLearned(item)) learned.add(item.id);
       for (const key of meaningKeys(item)) {
         if (!byKey.has(key)) byKey.set(key, new Set());
         byKey.get(key).add(item.id);
@@ -175,9 +180,9 @@
     const stem = (characters) => characters.replace(/する$/, '');
     const entry = (otherId) => {
       const other = index.byId.get(otherId);
-      if (otherId === id || !other || !index.learned.has(otherId)) return null;
+      if (otherId === id || !other) return null;
       if (stem(other.data.characters) === stem(item.data.characters)) return null;
-      if (!found.has(otherId)) found.set(otherId, { id: otherId, shared: [], ksGroupSize: null });
+      if (!found.has(otherId)) found.set(otherId, { id: otherId, learned: index.learned.has(otherId), shared: [], ksGroupSize: null });
       return found.get(otherId);
     };
 
@@ -201,10 +206,37 @@
 
     const score = (e) => e.shared.length * 10 + (e.ksGroupSize ? 20 - e.ksGroupSize : 0);
     const level = item.data.level;
-    return [...found.values()]
+    const ranked = [...found.values()]
       .map((e) => ({ ...e, score: score(e), word: wordInfo(index.byId.get(e.id)) }))
-      .sort((a, b) => b.score - a.score || Math.abs(a.word.level - level) - Math.abs(b.word.level - level) || a.id - b.id)
-      .slice(0, MAX_CANDIDATES);
+      .sort((a, b) => b.score - a.score || Math.abs(a.word.level - level) - Math.abs(b.word.level - level) || a.id - b.id);
+    return [
+      ...ranked.filter((e) => e.learned).slice(0, MAX_CANDIDATES),
+      ...ranked.filter((e) => !e.learned && e.score >= UNLEARNED_MIN_SCORE).slice(0, MAX_UNLEARNED),
+    ];
+  }
+
+  // Splits a Japanese sentence into plain and bold parts. The model marks the word
+  // (as inflected) with **…**; if it forgot, fall back to the word or its kanji stem.
+  function highlightParts(text, word) {
+    if (/\*\*[^*]+\*\*/.test(text)) {
+      return text
+        .split(/\*\*([^*]+)\*\*/)
+        .map((t, i) => ({ text: t.replace(/\*\*/g, ''), bold: i % 2 === 1 }))
+        .filter((p) => p.text);
+    }
+    const plain = text.replace(/\*\*/g, '');
+    const stemmed = (word || '').replace(/(する|[\u3041-\u309f]+)$/, '');
+    for (const needle of [word, stemmed]) {
+      const at = needle ? plain.indexOf(needle) : -1;
+      if (at >= 0) {
+        return [
+          { text: plain.slice(0, at), bold: false },
+          { text: needle, bold: true },
+          { text: plain.slice(at + needle.length), bold: false },
+        ].filter((p) => p.text);
+      }
+    }
+    return [{ text: plain, bold: false }];
   }
 
   function normalizeLanguage(language) {
@@ -235,6 +267,8 @@
       'Do not attribute to these words a usage that belongs to a near-synonym outside this list.',
       'Each field must add something new. Never restate the gist in the notes, or a note in another note.',
       'If the words overlap or are interchangeable in some contexts, say so. If one word is not really a near-synonym of the others, say so in the gist rather than forcing a contrast.',
+      'Often two words mean the same thing and differ mainly in formality or medium: everyday speech vs formal, written, literary or poetic. When that is the main difference, say it plainly in the gist.',
+      'Compare explicitly and by name: "unlike 予想, …", "the opposite of …", "much more formal than …, because …".',
       'Every Japanese phrase must be grammatical, natural and commonly used. Translations must be natural, not word-for-word. Proofread for typos.',
       `Write all explanations and translations in ${lang}; keep Japanese words, expressions and sentences in Japanese.`,
     ].join('\n');
@@ -243,18 +277,22 @@
       describeWords(words),
       '',
       'Respond with JSON only, in this shape:',
-      '{"gist":"","words":[{"word":"","reading":"","gloss":"","register":"","note":"","expressions":[{"ja":"","en":""}]}],"scene":{"setup":"","lines":[{"word":"","ja":"","en":""}]},"watch_out":""}',
+      '{"gist":"","words":[{"word":"","reading":"","gloss":"","register":"","everyday":"","note":"","opposite":{"ja":"","en":""},"expressions":[{"ja":"","en":""}],"example":{"ja":"","en":""}}],"scene":{"setup":"","lines":[{"word":"","ja":"","en":""}]},"watch_out":""}',
       '',
       'Fields:',
       '- gist: one sentence (at most 30 words) that contrasts all the words at once, e.g. "期待 is what you hope will happen, 予想 what you think will happen, 想定 what you assume so you can plan for it."',
       '- words: one entry per word above, in the same order.',
       '  - gloss: at most 6 words.',
-      `  - register: one of ${REGISTERS.join(', ')}; use neutral unless the register really differs.`,
-      '  - note: 1–2 sentences (at most 40 words) on its nuance and what it typically applies to (people, objects, plans, feelings…). Mention register only if notable.',
+      `  - register: where the word lives, one of ${REGISTERS.join(', ')}.`,
+      `  - everyday: how often you hear it in everyday conversation, one of ${EVERYDAY.join(', ')}.`,
+      '  - note: 1–2 sentences (at most 40 words) on its nuance and what it applies to (people, objects, plans, feelings…), compared by name with at least one other word in the list.',
+      '  - opposite: only a true, commonly paired antonym (e.g. 期待 ↔ 失望, 上る ↔ 下る), with a short gloss in en. Most words have none: then use empty strings. Never pick a merely related word.',
       '  - expressions: 2–3 common set phrases, compounds or collocations that best show this word\'s territory (e.g. 期待外れ, 予想外, 想定内), each with a short gloss in en.',
-      '- scene: one everyday situation in which every word appears; setup: at most 12 words describing it; lines: one natural sentence per word (at most 25 Japanese characters) with a natural translation in en. If one situation cannot fit all words naturally, use closely related moments.',
+      '  - example: one short sentence (at most 25 Japanese characters) whose context makes this word\'s specific nuance obvious, so that the other words would not fit as well; natural translation in en.',
+      '- scene: one everyday situation in which every word appears; setup: at most 12 words describing it; lines: one natural sentence per word (at most 25 Japanese characters) with a natural translation in en. If one situation cannot fit all words naturally, use closely related moments. Use different sentences from the per-word examples.',
+      '- In every Japanese example and scene sentence, wrap the compared word, exactly as it appears in the sentence including its inflection, in double asterisks, e.g. 雨を**想定して**傘を持ってきた。',
       '- watch_out: the single most useful extra contrast or trap (e.g. 予想外 "didn\'t see it coming" vs 想定外 "not in our plan", or a different word the learner may actually mean), at most 35 words. Leave it empty rather than inventing one.',
-      '- Keep the whole answer under 200 words of explanation.',
+      '- Keep the whole answer under 250 words of explanation.',
     ].join('\n');
     return { system, user, schema: RESULT_SCHEMA };
   }
@@ -285,7 +323,10 @@
         reading: str(w.reading),
         gloss: str(w.gloss),
         register: str(w.register).toLowerCase(),
+        everyday: EVERYDAY.includes(str(w.everyday).toLowerCase()) ? str(w.everyday).toLowerCase() : '',
         note: str(w.note),
+        opposite: { ja: str(w.opposite && w.opposite.ja), en: str(w.opposite && w.opposite.en) },
+        example: { ja: str(w.example && w.example.ja), en: str(w.example && w.example.en) },
         expressions: list(w.expressions).map((e) => ({ ja: str(e.ja), en: str(e.en) })).filter((e) => e.ja).slice(0, 3),
       }))
       .filter((w) => w.word);
@@ -423,7 +464,8 @@
   if (typeof module === 'object' && module.exports) {
     module.exports = {
       PROMPT_VERSION, MAX_CANDIDATES, KS_MAX_GROUP_SIZE, RESULT_SCHEMA, PROVIDERS, ProviderError,
-      normalizeMeaning, meaningKeys, wordInfo, isLearned, buildIndex, findCandidates, cacheKey,
+      MAX_UNLEARNED, UNLEARNED_MIN_SCORE, EVERYDAY,
+      normalizeMeaning, meaningKeys, wordInfo, isLearned, buildIndex, findCandidates, highlightParts, cacheKey,
       buildPrompt, buildChatPrompt, parseResult, buildRequest, parseResponse, friendlyError,
     };
     return;
@@ -622,12 +664,25 @@
         c.ksGroupSize ? 'Kanji Search group' : '',
       ].filter(Boolean).join(' · ');
       const chip = button(
-        [h('span', { lang: 'ja', class: 'wksw-chip-ja' }, c.word.characters), ' ', h('span', { class: 'wksw-chip-meaning' }, c.word.meanings[0])],
+        [
+          h('span', { lang: 'ja', class: 'wksw-chip-ja' }, c.word.characters),
+          ' ',
+          h('span', { class: 'wksw-chip-meaning' }, c.word.meanings[0]),
+          !c.learned && h('span', { class: 'wksw-chip-level' }, `Lv ${c.word.level}`),
+        ],
         () => toggle(c.id),
-        { class: 'wksw-btn wksw-chip', title: `${c.word.readings[0]} · ${why}`, 'data-id': String(c.id) },
+        {
+          class: `wksw-btn wksw-chip${c.learned ? '' : ' wksw-unlearned'}`,
+          title: `${c.word.readings[0]} · ${why}${c.learned ? '' : ` · not learned yet (level ${c.word.level})`}`,
+          'data-id': String(c.id),
+        },
       );
       return chip;
     });
+    const firstUnlearned = candidates.findIndex((c) => !c.learned);
+    const chipRow = firstUnlearned > 0
+      ? [...chips.slice(0, firstUnlearned), h('span', { class: 'wksw-muted wksw-divider' }, 'not learned yet:'), ...chips.slice(firstUnlearned)]
+      : chips;
 
     const status = h('div', { class: 'wksw-status', 'aria-live': 'polite' });
     const result = h('div', { class: 'wksw-result' });
@@ -639,7 +694,7 @@
       button('Ask ChatGPT', askChat, { title: 'Copy the prompt and open ChatGPT (no API key needed)' }),
       button('⚙', openSettings, { title: 'WaniKani Similar Words Explanation settings', 'aria-label': 'Settings' }),
     );
-    const root = h('div', { class: 'wksw' }, h('div', { class: 'wksw-chips' }, chips), actions, status, result);
+    const root = h('div', { class: 'wksw' }, h('div', { class: 'wksw-chips' }, chipRow), actions, status, result);
 
     const language = () => normalizeLanguage(loadSettings().language);
     const selectedIds = () => [currentId, ...selected];
@@ -735,6 +790,19 @@
     // word, then all words in one scene, then the one trap worth remembering.
     function renderResult(entry) {
       const r = entry.result;
+      const ja = (text, word) => h('span', { lang: 'ja' }, highlightParts(text, word).map((p) => (p.bold ? h('b', {}, p.text) : p.text)));
+      // ●●●○ = how often you hear it in everyday conversation; register only when it isn't plain neutral.
+      const usage = (w) => {
+        const dots = w.everyday ? EVERYDAY.length - EVERYDAY.indexOf(w.everyday) : 0;
+        if (!dots && (!w.register || w.register === 'neutral')) return null;
+        return h(
+          'div',
+          { class: 'wksw-usage' },
+          dots > 0 && h('span', { title: 'How often you hear it in everyday conversation' }, 'In conversation ', h('span', { class: 'wksw-dots', 'aria-hidden': 'true' }, '●'.repeat(dots) + '○'.repeat(EVERYDAY.length - dots)), ` ${w.everyday}`),
+          dots > 0 && w.register && ' · ',
+          w.register && h('span', { class: `wksw-register-${w.register}` }, w.register),
+        );
+      };
       const providerLabel = (PROVIDERS[entry.provider] || {}).label || entry.provider;
       result.replaceChildren(
         r.gist && h('p', { class: 'wksw-gist' }, r.gist),
@@ -750,12 +818,14 @@
                 { class: 'wksw-word-head' },
                 h('span', { lang: 'ja', class: 'wksw-ja' }, w.word),
                 h('span', { lang: 'ja', class: 'wksw-reading' }, w.reading),
-                w.register && w.register !== 'neutral' && h('span', { class: 'wksw-register' }, w.register),
               ),
               w.gloss && h('div', { class: 'wksw-gloss' }, w.gloss),
+              usage(w),
               w.note && h('p', { class: 'wksw-note' }, w.note),
+              w.opposite.ja && h('div', { class: 'wksw-opposite' }, h('span', { class: 'wksw-label' }, 'Opposite'), h('span', { lang: 'ja' }, w.opposite.ja), ' ', h('span', { class: 'wksw-muted' }, w.opposite.en)),
               w.expressions.length &&
                 h('ul', { class: 'wksw-expressions' }, w.expressions.map((e) => h('li', {}, h('span', { lang: 'ja' }, e.ja), ' ', h('span', { class: 'wksw-muted' }, e.en)))),
+              w.example.ja && h('div', { class: 'wksw-example' }, ja(w.example.ja, w.word), h('div', { class: 'wksw-muted' }, w.example.en)),
             ),
           ),
         ),
@@ -765,7 +835,7 @@
             { class: 'wksw-scene' },
             h('div', { class: 'wksw-label' }, 'In one scene'),
             r.scene.setup && h('div', { class: 'wksw-muted' }, r.scene.setup),
-            h('ul', {}, r.scene.lines.map((l) => h('li', {}, h('span', { lang: 'ja' }, l.ja), h('span', { class: 'wksw-muted' }, l.en)))),
+            h('ul', {}, r.scene.lines.map((l) => h('li', {}, ja(l.ja, l.word), h('span', { class: 'wksw-muted' }, l.en)))),
           ),
         r.watch_out && h('p', { class: 'wksw-watch' }, h('b', {}, 'Watch out: '), r.watch_out),
         h(
@@ -917,11 +987,20 @@
     .wksw-word { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 8px; padding: 8px 10px; }
     .wksw-word-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
     .wksw-ja { font-size: 22px; }
-    .wksw-register { margin-left: auto; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; }
     .wksw-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; margin-right: 6px; }
     .wksw-footer { margin-top: 8px; }
     .wksw-gist { font-size: 16px; font-weight: 600; margin: 8px 0; }
     .wksw-gloss { font-weight: 600; }
+    .wksw-usage { font-size: 13px; opacity: 0.8; margin-top: 2px; }
+    .wksw-dots { letter-spacing: 1px; color: #a100f1; }
+    .wksw-register-formal, .wksw-register-written, .wksw-register-literary, .wksw-register-casual { font-weight: 600; }
+    .wksw-opposite { margin: 2px 0 4px; }
+    .wksw-example { margin-top: 6px; padding-left: 8px; border-left: 3px solid color-mix(in srgb, currentColor 25%, transparent); }
+    .wksw-example b, .wksw-scene b { color: #a100f1; }
+    .wksw-unlearned { border-style: dashed; opacity: 0.75; }
+    .wksw-unlearned[aria-pressed="true"] { opacity: 1; }
+    .wksw-chip-level { font-size: 11px; margin-left: 4px; opacity: 0.7; }
+    .wksw-divider { align-self: center; margin-left: 4px; }
     .wksw-note { margin: 4px 0 6px; }
     .wksw-expressions { list-style: none; margin: 0; padding: 0; }
     .wksw-expressions li { margin: 2px 0; }

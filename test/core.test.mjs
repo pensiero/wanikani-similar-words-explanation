@@ -48,18 +48,18 @@ test('meaningKeys uses whitelist auxiliaries and user synonyms, never blacklist'
   assert.deepEqual([...core.meaningKeys(items[7])].sort(), ['air', 'convey']);
 });
 
-test('buildIndex keeps only learned, visible items in the meaning index', () => {
+test('buildIndex indexes all visible items and tracks which are learned', () => {
   const index = core.buildIndex(items);
   assert.ok(index.learned.has(1));
   assert.ok(!index.learned.has(4), 'srs_stage 0 is not learned');
   assert.ok(!index.byId.has(9), 'hidden subjects are dropped');
-  assert.deepEqual([...index.byKey.get('essential')].sort(), [1, 2]);
+  assert.deepEqual([...index.byKey.get('essential')].sort(), [1, 2, 4]);
 });
 
-test('findCandidates ranks shared meanings and skips unlearned words', () => {
+test('findCandidates ranks shared meanings; weak unlearned matches stay out', () => {
   const index = core.buildIndex(items);
   const ids = core.findCandidates(index, 1, null).map((c) => c.id);
-  assert.deepEqual(ids, [2]);
+  assert.deepEqual(ids, [2], '不可欠 is unlearned and shares only one meaning');
   const fromImportant = core.findCandidates(index, 2, null);
   // One shared meaning each, so the closer level wins: 必要 (lvl 6) before 大切 (lvl 4) for 重要 (lvl 9).
   assert.deepEqual(fromImportant.map((c) => c.id), [1, 3]);
@@ -81,6 +81,24 @@ test('findCandidates merges Kanji Search groups and ignores enumerations', () =>
   // A word found by both sources outranks one found by meaning only.
   const both = core.findCandidates(index, 2, { groups: [{ entries: [{ characters: '必要', metadata: {} }, { characters: '重要', metadata: {} }] }] });
   assert.equal(both[0].id, 1);
+});
+
+test('findCandidates lists strong unlearned words after the learned ones', () => {
+  const index = core.buildIndex(items);
+  const ks = { groups: [{ entries: ['必要', '不可欠', '重要'].map((characters) => ({ characters, metadata: {} })) }] };
+  const cands = core.findCandidates(index, 1, ks);
+  assert.deepEqual(cands.map((c) => [c.id, c.learned]), [[2, true], [4, false]]);
+});
+
+test('highlightParts uses the model markers, else the word or its kanji stem', () => {
+  assert.deepEqual(core.highlightParts('雨を**想定して**傘を持つ。', '想定'), [
+    { text: '雨を', bold: false }, { text: '想定して', bold: true }, { text: '傘を持つ。', bold: false },
+  ]);
+  assert.deepEqual(core.highlightParts('新しい仕事を始めます。', '始める'), [
+    { text: '新しい仕事を', bold: false }, { text: '始', bold: true }, { text: 'めます。', bold: false },
+  ]);
+  assert.deepEqual(core.highlightParts('期待する', '期待する'), [{ text: '期待する', bold: true }]);
+  assert.deepEqual(core.highlightParts('関係ない文。', '想定'), [{ text: '関係ない文。', bold: false }]);
 });
 
 test('cacheKey is order-independent and versioned', () => {
@@ -105,7 +123,7 @@ test('parseResult accepts fenced JSON, coerces and drops empty bits', () => {
   const raw = '```json\n' + JSON.stringify({
     gist: '必要 is needed, 重要 matters.',
     words: [
-      { word: '必要', reading: 'ひつよう', gloss: 'needed', register: 'Neutral', note: 'Requirement.', expressions: [{ ja: '必要不可欠', en: 'indispensable' }, { ja: '', en: 'x' }, { ja: 'a', en: '' }, { ja: 'b', en: '' }, { ja: 'c', en: '' }] },
+      { word: '必要', reading: 'ひつよう', gloss: 'needed', register: 'Neutral', everyday: 'Very common', note: 'Requirement.', example: { ja: '傘が**必要**だ。', en: 'I need an umbrella.' }, expressions: [{ ja: '必要不可欠', en: 'indispensable' }, { ja: '', en: 'x' }, { ja: 'a', en: '' }, { ja: 'b', en: '' }, { ja: 'c', en: '' }] },
       { word: '重要', reading: 'じゅうよう', gloss: 'important', register: 'formal' },
     ],
     scene: { setup: 'Packing', lines: [{ word: '必要', ja: '傘が必要だ。', en: 'I need an umbrella.' }, { word: '重要', ja: '', en: 'x' }] },
@@ -113,6 +131,10 @@ test('parseResult accepts fenced JSON, coerces and drops empty bits', () => {
   const r = core.parseResult(raw);
   assert.equal(r.gist, '必要 is needed, 重要 matters.');
   assert.equal(r.words[0].register, 'neutral');
+  assert.equal(r.words[0].everyday, 'very common');
+  assert.deepEqual(r.words[0].example, { ja: '傘が**必要**だ。', en: 'I need an umbrella.' });
+  assert.deepEqual(r.words[1].opposite, { ja: '', en: '' });
+  assert.equal(r.words[1].everyday, '');
   assert.equal(r.words[0].expressions.length, 3);
   assert.deepEqual(r.words[1].expressions, []);
   assert.equal(r.scene.lines.length, 1);

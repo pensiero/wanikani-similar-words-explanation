@@ -26,7 +26,8 @@ test('real data: index builds fast and candidate lists stay small', { skip: !pre
   let withCandidates = 0;
   for (const id of index.learned) {
     const c = core.findCandidates(index, id, null);
-    assert.ok(c.length <= core.MAX_CANDIDATES);
+    assert.ok(c.filter((x) => x.learned).length <= core.MAX_CANDIDATES);
+    assert.ok(c.filter((x) => !x.learned).length <= core.MAX_UNLEARNED);
     if (c.length) withCandidates++;
   }
   console.log(`learned=${index.learned.size} withCandidates=${withCandidates} indexMs=${ms.toFixed(0)}`);

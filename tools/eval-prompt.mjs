@@ -27,7 +27,7 @@ const byChars = new Map(subjects.filter((s) => !s.data.hidden_at).map((s) => [s.
 const wordsOf = (result) =>
   [
     result.gist,
-    ...result.words.flatMap((w) => [w.gloss, w.note, ...w.expressions.map((e) => e.en)]),
+    ...result.words.flatMap((w) => [w.gloss, w.note, w.opposite.en, w.example.en, ...w.expressions.map((e) => e.en)]),
     result.scene.setup,
     ...result.scene.lines.map((l) => l.en),
     result.watch_out,
@@ -52,18 +52,20 @@ for (const pair of PAIRS) {
     run.model = model;
     run.result = core.parseResult(text);
     run.explanationWords = wordsOf(run.result);
-    run.exampleChars = run.result.scene.lines.map((l) => l.ja.length);
+    run.exampleChars = run.result.scene.lines.map((l) => l.ja.replace(/\*\*/g, '').length);
+    const sentences = [...run.result.words.map((w) => w.example.ja), ...run.result.scene.lines.map((l) => l.ja)].filter(Boolean);
+    run.marked = `${sentences.filter((t) => /\*\*[^*]+\*\*/.test(t)).length}/${sentences.length}`;
     run.usage = json.usageMetadata || json.usage;
   } catch (e) {
     run.error = e.message;
   }
   runs.push(run);
-  console.log(`${run.pair.padEnd(12)} ${String(run.status).padEnd(4)} ${String(ms).padStart(5)}ms ${run.error ? 'ERROR ' + run.error : `${run.explanationWords} words, scene lines ${run.exampleChars.join('/')} chars`}`);
+  console.log(`${run.pair.padEnd(12)} ${String(run.status).padEnd(4)} ${String(ms).padStart(5)}ms ${run.error ? 'ERROR ' + run.error : `${run.explanationWords} words, scene lines ${run.exampleChars.join('/')} chars, marked ${run.marked}`}`);
   if (res.status === 402 || res.status === 401 || res.status === 403) break;
 }
 
 const ok = runs.filter((r) => !r.error);
-console.log(`\nvalid ${ok.length}/${runs.length}; over 200 words: ${ok.filter((r) => r.explanationWords > 200).length}; median latency ${runs.map((r) => r.ms).sort((a, b) => a - b)[Math.floor(runs.length / 2)] || 0}ms`);
+console.log(`\nvalid ${ok.length}/${runs.length}; over 250 words: ${ok.filter((r) => r.explanationWords > 250).length}; median latency ${runs.map((r) => r.ms).sort((a, b) => a - b)[Math.floor(runs.length / 2)] || 0}ms`);
 const out = new URL(`eval-${provider}-${cfg.model.replace(/\W+/g, '_')}.json`, dir);
 writeFileSync(out, JSON.stringify(runs, null, 1));
 console.log(`full output: ${out.pathname}`);

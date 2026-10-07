@@ -2,9 +2,15 @@
 
 A Tampermonkey userscript for [WaniKani](https://www.wanikani.com). For the vocab item you're looking at, it lists words **you have already learned** that are easy to confuse with it (必要 / 重要, 思う / 考える, 上る / 登る …). When you click, it asks an LLM how they differ and shows a short, consistently structured answer inside the item info:
 
-- a one-sentence gist that contrasts all the words at once
-- for each word: reading, short gloss, a note on its nuance, and 2–3 key expressions (期待外れ, 予想外, 想定内 …)
-- one everyday scene in which every word appears, with translations
+- a one-sentence gist that contrasts all the words at once, and says so plainly when the real difference is formality (everyday vs formal, written or literary)
+- for each word:
+  - reading and a short gloss
+  - how often you hear it in conversation (●●●○) and its register
+  - a note that compares it by name with the other words
+  - a true opposite, when one exists
+  - 2–3 key expressions (期待外れ, 予想外, 想定内 …)
+  - a short example sentence whose context makes the nuance obvious
+- one everyday scene in which every word appears; the compared words are in bold
 - one "watch out": the trap or extra contrast most worth remembering, when there is one
 
 It never calls an LLM by itself. Answers are cached in your browser, so revisiting a pair costs nothing. **Regenerate** asks again and replaces the cached answer.
@@ -16,7 +22,7 @@ It combines two sources:
 1. **Shared meanings.** It looks for vocab you've started (Apprentice 1 or higher) whose accepted WK meanings, whitelisted alternatives or your own synonyms overlap with the current word's.
 2. **[Kanji Search](https://www.kanjisearch.com) groups.** These are hand-curated groups of related words from [Kanji Search Notes](https://greasyfork.org/scripts/444554-kanji-search-notes) by Mark Hennessy. They catch near-synonyms whose English glosses differ, such as 思う / 考える. Large enumerations (numbers, planets, days) are skipped. You can turn this source off in Settings.
 
-Up to 8 candidates appear as chips. Pick one to three, then click **Explain the difference**. A dot on a chip means that pair is already cached.
+Up to 8 learned candidates appear as chips. Up to 4 strong matches you **haven't learned yet** follow them, with a dashed outline and their level; they can be compared too. Pick one to three, then click **Explain the difference**. A dot on a chip means that pair is already cached.
 
 The section sits under **Meaning** in the item info. In reviews it only appears after you've answered, so it never gives the meaning away. Its buttons never take keyboard focus, so Enter still moves to the next item.
 

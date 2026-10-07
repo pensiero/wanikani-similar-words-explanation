@@ -4,7 +4,7 @@ WaniKani often teaches words with near-identical English meanings many levels ap
 
 **What it does**
 - Under **Meaning** in the item info (lessons, reviews after you answer, extra study, vocab pages), it lists words *you've already learned* that are easy to confuse with the current one. It finds them by shared meanings plus the hand-curated groups from [Kanji Search](https://www.kanjisearch.com) (thanks, Mark!).
-- Pick one to three and click **Explain the difference**. You get a one-line gist, a short note and key expressions for each word, one scene using all of them, and the one trap worth remembering.
+- Pick one to three and click **Explain the difference**. You get a one-line gist, then for each word a comparative note, how everyday vs formal it is, key expressions and an example, then one scene using all of them, and the one trap worth remembering. Strong matches you haven't learned yet are listed too, clearly marked.
 - Nothing is sent unless you click. Answers are cached in your browser; **Regenerate** asks again.
 - It never steals focus, so Enter still goes to the next review.
 
