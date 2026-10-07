@@ -5,10 +5,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
-const source = readFileSync(new URL('../wanikani-nuance.user.js', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../wanikani-similar-words-explanation.user.js', import.meta.url), 'utf8');
 const header = source.slice(source.indexOf('// ==UserScript=='), source.indexOf('// ==/UserScript=='));
 const meta = (key) => [...header.matchAll(new RegExp(`^// @${key}\\s+(.+)$`, 'gm'))].map((m) => m[1].trim());
-const core = createRequire(import.meta.url)('../wanikani-nuance.user.js');
+const core = createRequire(import.meta.url)('../wanikani-similar-words-explanation.user.js');
 
 test('version is semver', () => {
   assert.match(meta('version')[0], /^\d+\.\d+\.\d+$/);

@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         WaniKani Nuance: similar words explained
-// @namespace    https://github.com/pensiero/wanikani-similar-kanji-explanation
-// @version      0.1.0
+// @name         WaniKani Similar Words Explanation
+// @namespace    https://github.com/pensiero/wanikani-similar-words-explanation
+// @version      0.2.0
 // @description  Lists vocab you have learned that is easy to confuse with the current word (shared meanings + Kanji Search groups) and, on click, asks an LLM how they differ. Answers are cached in your browser.
 // @author       pensiero
 // @license      MIT
@@ -23,10 +23,10 @@
 // @connect      www.kanjisearch.com
 // @connect      localhost
 // @connect      127.0.0.1
-// @homepageURL  https://github.com/pensiero/wanikani-similar-kanji-explanation
-// @supportURL   https://github.com/pensiero/wanikani-similar-kanji-explanation/issues
-// @downloadURL  https://raw.githubusercontent.com/pensiero/wanikani-similar-kanji-explanation/main/wanikani-nuance.user.js
-// @updateURL    https://raw.githubusercontent.com/pensiero/wanikani-similar-kanji-explanation/main/wanikani-nuance.user.js
+// @homepageURL  https://github.com/pensiero/wanikani-similar-words-explanation
+// @supportURL   https://github.com/pensiero/wanikani-similar-words-explanation/issues
+// @downloadURL  https://raw.githubusercontent.com/pensiero/wanikani-similar-words-explanation/main/wanikani-similar-words-explanation.user.js
+// @updateURL    https://raw.githubusercontent.com/pensiero/wanikani-similar-words-explanation/main/wanikani-similar-words-explanation.user.js
 // ==/UserScript==
 
 /* global GM_getValue, GM_setValue, GM_deleteValue, GM_listValues, GM_xmlhttpRequest,
@@ -41,7 +41,7 @@
 
   // Bump whenever the prompt or the result schema changes: it is part of the
   // cache key, so old answers stop matching instead of rendering wrongly.
-  const PROMPT_VERSION = 1;
+  const PROMPT_VERSION = 2;
 
   const LEARNED_MIN_SRS_STAGE = 1; // Apprentice 1: confusion starts at first sight
   const MAX_CANDIDATES = 8;
@@ -216,13 +216,13 @@
   function lengthRules(language) {
     return [
       'core_meaning: at most 10 words.',
-      `register: one of ${REGISTERS.join(', ')}; register_note: at most 8 words.`,
+      `register: one of ${REGISTERS.join(', ')}; register_note: at most 8 words on how its register or tone differs from the other words (never a generic note like "common in everyday use").`,
       'contexts: up to 3 short phrases naming typical situations or subjects.',
-      'collocations: up to 3 common Japanese collocations, in Japanese only.',
+      'collocations: up to 3 common Japanese collocations, in Japanese only, preferably ones that show the difference; only use pairings native speakers actually use.',
       `example: one natural sentence of at most 30 Japanese characters using the word, with a ${language} translation.`,
       'choose: one entry per word, saying in one line when to choose it over the others.',
       'rule_of_thumb: one sentence, at most 20 words.',
-      'common_mistake: at most 25 words; include a wrong → right Japanese pair when possible.',
+      'common_mistake: at most 25 words; include a wrong → right Japanese pair when possible. The wrong version must be genuinely wrong or clearly unnatural, not merely less common.',
       'Keep all explanation text under 180 words in total.',
     ];
   }
@@ -234,7 +234,8 @@
       'You are a precise Japanese teacher explaining near-synonyms to an advanced learner.',
       'Be concrete and brief. Use the readings given; never invent readings.',
       'If the words are interchangeable in some contexts, say so instead of inventing differences.',
-      'Prefer common, natural usage over rare dictionary senses.',
+      'Prefer common, natural usage over rare dictionary senses. If a usage belongs to a near-synonym outside this list (e.g. 昇る for the sun), do not attribute it to these words.',
+      'Proofread: no typos, and every Japanese phrase must be grammatical and natural (except the deliberately wrong half of the common mistake).',
       `Write every explanation in ${lang}. Keep Japanese words, collocations and example sentences in Japanese.`,
     ].join('\n');
     const user = [
@@ -368,7 +369,7 @@
     }
     const headers = { 'Content-Type': 'application/json' };
     if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
-    if (providerId === 'openrouter') headers['X-Title'] = 'WaniKani Nuance';
+    if (providerId === 'openrouter') headers['X-Title'] = 'WaniKani Similar Words Explanation';
     return {
       url: `${base}/chat/completions`,
       headers,
@@ -535,8 +536,8 @@
 
   function exportCache() {
     const entries = Object.fromEntries(cacheKeys().map((k) => [k, GM_getValue(k)]));
-    const blob = new Blob([JSON.stringify({ format: 'wk-nuance-cache', version: 1, entries }, null, 1)], { type: 'application/json' });
-    const a = h('a', { href: URL.createObjectURL(blob), download: `wk-nuance-cache-${new Date().toISOString().slice(0, 10)}.json` });
+    const blob = new Blob([JSON.stringify({ format: 'wk-similar-words-cache', version: 1, entries }, null, 1)], { type: 'application/json' });
+    const a = h('a', { href: URL.createObjectURL(blob), download: `wk-similar-words-cache-${new Date().toISOString().slice(0, 10)}.json` });
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     toast(`Exported ${Object.keys(entries).length} cached comparisons.`);
@@ -546,8 +547,8 @@
     const input = h('input', { type: 'file', accept: 'application/json,.json' });
     input.addEventListener('change', async () => {
       const data = safeJson(await input.files[0].text());
-      if (!data || data.format !== 'wk-nuance-cache' || typeof data.entries !== 'object') {
-        toast('That file is not a WaniKani Nuance cache export.');
+      if (!data || data.format !== 'wk-similar-words-cache' || typeof data.entries !== 'object') {
+        toast('That file is not a WaniKani Similar Words Explanation cache export.');
         return;
       }
       let count = 0;
@@ -592,7 +593,7 @@
       {
         type: 'button',
         tabindex: '-1',
-        class: 'wkn-btn',
+        class: 'wksw-btn',
         onmousedown: (e) => e.preventDefault(),
         onclick: (e) => {
           e.currentTarget.blur();
@@ -605,7 +606,7 @@
   }
 
   function toast(message) {
-    const el = h('div', { class: 'wkn-toast', role: 'status' }, message);
+    const el = h('div', { class: 'wksw-toast', role: 'status' }, message);
     document.body.append(el);
     setTimeout(() => el.remove(), 4000);
   }
@@ -622,24 +623,24 @@
         c.ksGroupSize ? 'Kanji Search group' : '',
       ].filter(Boolean).join(' · ');
       const chip = button(
-        [h('span', { lang: 'ja', class: 'wkn-chip-ja' }, c.word.characters), ' ', h('span', { class: 'wkn-chip-meaning' }, c.word.meanings[0])],
+        [h('span', { lang: 'ja', class: 'wksw-chip-ja' }, c.word.characters), ' ', h('span', { class: 'wksw-chip-meaning' }, c.word.meanings[0])],
         () => toggle(c.id),
-        { class: 'wkn-btn wkn-chip', title: `${c.word.readings[0]} · ${why}`, 'data-id': String(c.id) },
+        { class: 'wksw-btn wksw-chip', title: `${c.word.readings[0]} · ${why}`, 'data-id': String(c.id) },
       );
       return chip;
     });
 
-    const status = h('div', { class: 'wkn-status', 'aria-live': 'polite' });
-    const result = h('div', { class: 'wkn-result' });
-    const compareBtn = button('Explain the difference', () => run(false), { class: 'wkn-btn wkn-primary' });
+    const status = h('div', { class: 'wksw-status', 'aria-live': 'polite' });
+    const result = h('div', { class: 'wksw-result' });
+    const compareBtn = button('Explain the difference', () => run(false), { class: 'wksw-btn wksw-primary' });
     const actions = h(
       'div',
-      { class: 'wkn-actions' },
+      { class: 'wksw-actions' },
       compareBtn,
       button('Ask ChatGPT', askChat, { title: 'Copy the prompt and open ChatGPT (no API key needed)' }),
-      button('⚙', openSettings, { title: 'WaniKani Nuance settings', 'aria-label': 'Settings' }),
+      button('⚙', openSettings, { title: 'WaniKani Similar Words Explanation settings', 'aria-label': 'Settings' }),
     );
-    const root = h('div', { class: 'wkn' }, h('div', { class: 'wkn-chips' }, chips), actions, status, result);
+    const root = h('div', { class: 'wksw' }, h('div', { class: 'wksw-chips' }, chips), actions, status, result);
 
     const language = () => normalizeLanguage(loadSettings().language);
     const selectedIds = () => [currentId, ...selected];
@@ -658,7 +659,7 @@
       for (const chip of chips) {
         const id = Number(chip.dataset.id);
         chip.setAttribute('aria-pressed', String(selected.has(id)));
-        chip.classList.toggle('wkn-cached', !!cachedEntry(cacheKey([currentId, id], language())));
+        chip.classList.toggle('wksw-cached', !!cachedEntry(cacheKey([currentId, id], language())));
       }
       if (inflight) return;
       const entry = selected.size ? cachedEntry(cacheKey(selectedIds(), language())) : null;
@@ -687,12 +688,12 @@
       try {
         request = buildRequest(settings.provider, cfg, buildPrompt(ws, language()));
       } catch (e) {
-        status.replaceChildren(h('span', { class: 'wkn-error' }, e.message));
+        status.replaceChildren(h('span', { class: 'wksw-error' }, e.message));
         return;
       }
       inflight = gmRequest({ method: 'POST', url: request.url, headers: request.headers, body: JSON.stringify(request.body) });
       compareBtn.disabled = true;
-      status.replaceChildren(h('span', { class: 'wkn-spinner' }), ` Asking ${provider.label}… `, button('Cancel', () => inflight && inflight.abort()));
+      status.replaceChildren(h('span', { class: 'wksw-spinner' }), ` Asking ${provider.label}… `, button('Cancel', () => inflight && inflight.abort()));
 
       try {
         const response = await inflight.promise;
@@ -716,7 +717,7 @@
         if (e.aborted) return refresh();
         const message = e instanceof ProviderError ? friendlyError(e) : e.message;
         status.replaceChildren(
-          h('span', { class: 'wkn-error' }, message),
+          h('span', { class: 'wksw-error' }, message),
           ' ',
           button('Retry', () => run(force)),
           button('Ask ChatGPT instead', askChat),
@@ -734,39 +735,39 @@
     function renderResult(entry) {
       const r = entry.result;
       const list = (label, items, lang) =>
-        items.length ? h('div', { class: 'wkn-field' }, h('span', { class: 'wkn-label' }, label), h('span', { lang }, items.join(' · '))) : null;
+        items.length ? h('div', { class: 'wksw-field' }, h('span', { class: 'wksw-label' }, label), h('span', { lang }, items.join(' · '))) : null;
       const providerLabel = (PROVIDERS[entry.provider] || {}).label || entry.provider;
       result.replaceChildren(
         h(
           'div',
-          { class: 'wkn-words' },
+          { class: 'wksw-words' },
           r.words.map((w) =>
             h(
               'div',
-              { class: 'wkn-word' },
+              { class: 'wksw-word' },
               h(
                 'div',
-                { class: 'wkn-word-head' },
-                h('span', { lang: 'ja', class: 'wkn-ja' }, w.word),
-                h('span', { lang: 'ja', class: 'wkn-reading' }, w.reading),
-                w.register && h('span', { class: 'wkn-register', title: w.register_note }, w.register),
+                { class: 'wksw-word-head' },
+                h('span', { lang: 'ja', class: 'wksw-ja' }, w.word),
+                h('span', { lang: 'ja', class: 'wksw-reading' }, w.reading),
+                w.register && h('span', { class: 'wksw-register', title: w.register_note }, w.register),
               ),
-              h('div', { class: 'wkn-core' }, w.core_meaning),
-              w.register_note && h('div', { class: 'wkn-muted' }, w.register_note),
+              h('div', { class: 'wksw-core' }, w.core_meaning),
+              w.register_note && h('div', { class: 'wksw-muted' }, w.register_note),
               list('Contexts', w.contexts),
               list('Collocations', w.collocations, 'ja'),
-              w.example.ja && h('div', { class: 'wkn-example' }, h('div', { lang: 'ja' }, w.example.ja), h('div', { class: 'wkn-muted' }, w.example.translation)),
+              w.example.ja && h('div', { class: 'wksw-example' }, h('div', { lang: 'ja' }, w.example.ja), h('div', { class: 'wksw-muted' }, w.example.translation)),
             ),
           ),
         ),
-        r.choose.length && h('div', { class: 'wkn-choose' }, h('div', { class: 'wkn-label' }, 'When to choose which'),
+        r.choose.length && h('div', { class: 'wksw-choose' }, h('div', { class: 'wksw-label' }, 'When to choose which'),
           h('ul', {}, r.choose.map((c) => h('li', {}, h('b', { lang: 'ja' }, c.word), ': ', c.when)))),
-        r.rule_of_thumb && h('p', { class: 'wkn-rule' }, h('b', {}, 'Rule of thumb: '), r.rule_of_thumb),
-        r.common_mistake && h('p', { class: 'wkn-mistake' }, h('b', {}, 'Common mistake: '), r.common_mistake),
+        r.rule_of_thumb && h('p', { class: 'wksw-rule' }, h('b', {}, 'Rule of thumb: '), r.rule_of_thumb),
+        r.common_mistake && h('p', { class: 'wksw-mistake' }, h('b', {}, 'Common mistake: '), r.common_mistake),
         h(
           'div',
-          { class: 'wkn-footer' },
-          h('span', { class: 'wkn-muted' }, `${providerLabel} · ${entry.model} · ${new Date(entry.createdAt).toLocaleDateString()}`),
+          { class: 'wksw-footer' },
+          h('span', { class: 'wksw-muted' }, `${providerLabel} · ${entry.model} · ${new Date(entry.createdAt).toLocaleDateString()}`),
           button('Regenerate', () => run(true)),
           button('Ask ChatGPT', askChat),
         ),
@@ -786,11 +787,11 @@
     try {
       index = await getIndex();
     } catch (e) {
-      if (e.message !== 'wkof-missing') console.warn('[WaniKani Nuance] could not load item data', e);
+      if (e.message !== 'wkof-missing') console.warn('[WaniKani Similar Words Explanation] could not load item data', e);
       return h(
         'p',
-        { class: 'wkn-muted' },
-        'WaniKani Nuance needs the ',
+        { class: 'wksw-muted' },
+        'WaniKani Similar Words Explanation needs the ',
         h('a', { href: 'https://community.wanikani.com/t/instructions-installing-wanikani-open-framework/28549', target: '_blank', rel: 'noopener' }, 'WaniKani Open Framework'),
         '.',
       );
@@ -805,7 +806,7 @@
 
   function openSettings() {
     const draft = loadSettings();
-    const field = (label, control, hint) => h('label', { class: 'wkn-setting' }, h('span', {}, label), control, hint && h('small', { class: 'wkn-muted' }, hint));
+    const field = (label, control, hint) => h('label', { class: 'wksw-setting' }, h('span', {}, label), control, hint && h('small', { class: 'wksw-muted' }, hint));
 
     const providerSelect = h('select', {}, Object.entries(PROVIDERS).map(([id, p]) => h('option', { value: id }, p.label)));
     const keyInput = h('input', { type: 'password', autocomplete: 'off', spellcheck: 'false' });
@@ -841,7 +842,7 @@
     });
     loadProviderFields();
 
-    const cacheInfo = h('span', { class: 'wkn-muted' }, `${cacheKeys().length} cached comparisons`);
+    const cacheInfo = h('span', { class: 'wksw-muted' }, `${cacheKeys().length} cached comparisons`);
     let clearArmed = false;
     const clearBtn = h('button', { type: 'button' }, 'Clear');
     clearBtn.addEventListener('click', () => {
@@ -858,19 +859,19 @@
 
     const dialog = h(
       'dialog',
-      { class: 'wkn-dialog' },
+      { class: 'wksw-dialog' },
       h(
         'form',
         { method: 'dialog' },
-        h('h2', {}, 'WaniKani Nuance'),
+        h('h2', {}, 'WaniKani Similar Words Explanation'),
         field('Provider', providerSelect),
         field('API key', keyInput, h('span', {}, 'Stored only in Tampermonkey storage. ', keyLink)),
         field('Model', modelInput, 'Leave empty for the default.'),
         field('Base URL', baseInput, 'Leave empty for the default. Custom hosts ask for permission once.'),
         field('Explanation language', languageInput),
-        h('label', { class: 'wkn-setting wkn-inline' }, ksInput, h('span', {}, 'Also use Kanji Search groups (fetches kanjisearch.com notes for the current word)')),
-        h('div', { class: 'wkn-setting wkn-inline' }, cacheInfo, h('button', { type: 'button', onclick: exportCache }, 'Export'), h('button', { type: 'button', onclick: importCache }, 'Import'), clearBtn),
-        h('div', { class: 'wkn-dialog-actions' }, h('button', { value: 'cancel' }, 'Cancel'), h('button', { value: 'save', class: 'wkn-primary' }, 'Save')),
+        h('label', { class: 'wksw-setting wksw-inline' }, ksInput, h('span', {}, 'Also use Kanji Search groups (fetches kanjisearch.com notes for the current word)')),
+        h('div', { class: 'wksw-setting wksw-inline' }, cacheInfo, h('button', { type: 'button', onclick: exportCache }, 'Export'), h('button', { type: 'button', onclick: importCache }, 'Import'), clearBtn),
+        h('div', { class: 'wksw-dialog-actions' }, h('button', { value: 'cancel' }, 'Cancel'), h('button', { value: 'save', class: 'wksw-primary' }, 'Save')),
       ),
     );
     // Keep WaniKani's quiz hotkeys from firing while typing in the dialog.
@@ -893,55 +894,55 @@
   // ---- styles & wiring ---------------------------------------------------------
 
   const CSS = `
-    .wkn { margin: 0.5em 0 1em; font-size: 15px; line-height: 1.5; }
-    .wkn-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-    .wkn-btn { font: inherit; font-size: 14px; color: inherit; background: transparent; cursor: pointer;
+    .wksw { margin: 0.5em 0 1em; font-size: 15px; line-height: 1.5; }
+    .wksw-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .wksw-btn { font: inherit; font-size: 14px; color: inherit; background: transparent; cursor: pointer;
       border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: 6px; padding: 3px 10px; }
-    .wkn-btn:hover { border-color: currentColor; }
-    .wkn-btn[disabled] { opacity: 0.5; cursor: default; }
-    .wkn-chip[aria-pressed="true"] { background: #a100f1; border-color: #a100f1; color: #fff; }
-    .wkn-chip.wkn-cached::after { content: '•'; margin-left: 4px; }
-    .wkn-chip-ja { font-size: 16px; }
-    .wkn-chip-meaning { opacity: 0.75; }
-    .wkn-primary { font-weight: 600; }
-    .wkn-actions, .wkn-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-    .wkn-status { margin: 6px 0; min-height: 1em; }
-    .wkn-error { color: #d0021b; }
-    .wkn-muted { opacity: 0.7; font-size: 13px; }
-    .wkn-words { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin: 8px 0; }
-    .wkn-word { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 8px; padding: 8px 10px; }
-    .wkn-word-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-    .wkn-ja { font-size: 22px; }
-    .wkn-register { margin-left: auto; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; }
-    .wkn-core { font-weight: 600; }
-    .wkn-field { margin-top: 4px; }
-    .wkn-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; margin-right: 6px; }
-    .wkn-example { margin-top: 6px; padding-left: 8px; border-left: 3px solid #a100f1; }
-    .wkn-choose ul { margin: 2px 0 8px; padding-left: 18px; }
-    .wkn-rule, .wkn-mistake { margin: 4px 0; }
-    .wkn-footer { margin-top: 8px; }
-    .wkn-spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid currentColor; border-right-color: transparent;
-      border-radius: 50%; animation: wkn-spin 0.8s linear infinite; vertical-align: -1px; }
-    @keyframes wkn-spin { to { transform: rotate(360deg); } }
-    .wkn-toast { position: fixed; right: 16px; bottom: 16px; z-index: 100000; background: #333; color: #fff;
+    .wksw-btn:hover { border-color: currentColor; }
+    .wksw-btn[disabled] { opacity: 0.5; cursor: default; }
+    .wksw-chip[aria-pressed="true"] { background: #a100f1; border-color: #a100f1; color: #fff; }
+    .wksw-chip.wksw-cached::after { content: '•'; margin-left: 4px; }
+    .wksw-chip-ja { font-size: 16px; }
+    .wksw-chip-meaning { opacity: 0.75; }
+    .wksw-primary { font-weight: 600; }
+    .wksw-actions, .wksw-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .wksw-status { margin: 6px 0; min-height: 1em; }
+    .wksw-error { color: #d0021b; }
+    .wksw-muted { opacity: 0.7; font-size: 13px; }
+    .wksw-words { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin: 8px 0; }
+    .wksw-word { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 8px; padding: 8px 10px; }
+    .wksw-word-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+    .wksw-ja { font-size: 22px; }
+    .wksw-register { margin-left: auto; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; }
+    .wksw-core { font-weight: 600; }
+    .wksw-field { margin-top: 4px; }
+    .wksw-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; margin-right: 6px; }
+    .wksw-example { margin-top: 6px; padding-left: 8px; border-left: 3px solid #a100f1; }
+    .wksw-choose ul { margin: 2px 0 8px; padding-left: 18px; }
+    .wksw-rule, .wksw-mistake { margin: 4px 0; }
+    .wksw-footer { margin-top: 8px; }
+    .wksw-spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid currentColor; border-right-color: transparent;
+      border-radius: 50%; animation: wksw-spin 0.8s linear infinite; vertical-align: -1px; }
+    @keyframes wksw-spin { to { transform: rotate(360deg); } }
+    .wksw-toast { position: fixed; right: 16px; bottom: 16px; z-index: 100000; background: #333; color: #fff;
       padding: 8px 12px; border-radius: 6px; font-size: 14px; }
-    .wkn-dialog { width: min(440px, 92vw); border: none; border-radius: 10px; padding: 16px 20px; font-size: 14px; }
-    .wkn-dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
-    .wkn-dialog h2 { margin: 0 0 12px; font-size: 18px; }
-    .wkn-setting { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
-    .wkn-setting input[type=text], .wkn-setting input[type=password], .wkn-setting select { font: inherit; padding: 4px 6px; }
-    .wkn-inline { flex-direction: row; align-items: center; gap: 8px; }
-    .wkn-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+    .wksw-dialog { width: min(440px, 92vw); border: none; border-radius: 10px; padding: 16px 20px; font-size: 14px; }
+    .wksw-dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+    .wksw-dialog h2 { margin: 0 0 12px; font-size: 18px; }
+    .wksw-setting { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
+    .wksw-setting input[type=text], .wksw-setting input[type=password], .wksw-setting select { font: inherit; padding: 4px 6px; }
+    .wksw-inline { flex-direction: row; align-items: center; gap: 8px; }
+    .wksw-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
   `;
 
   function addStyle() {
-    if (document.getElementById('wkn-style')) return;
-    document.head.append(h('style', { id: 'wkn-style' }, CSS));
+    if (document.getElementById('wksw-style')) return;
+    document.head.append(h('style', { id: 'wksw-style' }, CSS));
   }
 
   const injector = page.wkItemInfo || window.wkItemInfo;
   if (!injector) {
-    console.error('[WaniKani Nuance] WaniKani Item Info Injector did not load.');
+    console.error('[WaniKani Similar Words Explanation] WaniKani Item Info Injector did not load.');
     return;
   }
   addStyle();

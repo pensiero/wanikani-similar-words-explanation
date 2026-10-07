@@ -1,4 +1,4 @@
-# WaniKani Nuance: similar words explained
+# WaniKani Similar Words Explanation
 
 A Tampermonkey userscript for [WaniKani](https://www.wanikani.com). For the vocab item you're looking at, it lists words **you have already learned** that are easy to confuse with it (必要 / 重要, 思う / 考える, 上る / 登る …). When you click, it asks an LLM how they differ and shows a short, consistently structured answer inside the item info:
 
@@ -25,14 +25,14 @@ The section sits under **Meaning** in the item info. In reviews it only appears 
    - **Chrome / Edge 138+:** open Tampermonkey's extension details (right-click the icon → *Manage extension*) and turn on **Allow User Scripts**. On older versions, enable *Developer mode* on the extensions page instead. Without this, no userscript runs.
    - **Firefox:** nothing extra.
 2. Install the [WaniKani Open Framework](https://community.wanikani.com/t/instructions-installing-wanikani-open-framework/28549) if you don't have it yet.
-3. Install **WaniKani Nuance** from Greasy Fork (link coming), or from [GitHub](https://raw.githubusercontent.com/pensiero/wanikani-similar-kanji-explanation/main/wanikani-nuance.user.js).
-4. Get an LLM API key (see below), then on any WaniKani page open Tampermonkey's menu → **WaniKani Nuance → Settings** and paste it in.
+3. Install **WaniKani Similar Words Explanation** from Greasy Fork (link coming), or from [GitHub](https://raw.githubusercontent.com/pensiero/wanikani-similar-words-explanation/main/wanikani-similar-words-explanation.user.js).
+4. Get an LLM API key (see below), then on any WaniKani page open Tampermonkey's menu → **WaniKani Similar Words Explanation → Settings** and paste it in.
 
 ### LLM providers
 
 | Provider | Cost | Notes |
 |---|---|---|
-| **Google Gemini** (default) | Free tier | Create a key at [AI Studio](https://aistudio.google.com/apikey). The key must come from a project **with no billing account linked**; a billing-linked project with an empty prepaid wallet returns HTTP 402. Outside the EEA/UK/Switzerland, Google may use free-tier prompts to improve its products. |
+| **Google Gemini** (default) | Free tier | Create a key at [AI Studio](https://aistudio.google.com/apikey). The key must come from a project **with no billing account linked**; a billing-linked project with an empty prepaid wallet returns HTTP 402. The default model `gemini-3.5-flash-lite` answers in about 2 s. The bigger Flash models give somewhat better answers, but on the free tier they often return 503 (overloaded) and take 6–90 s. Outside the EEA/UK/Switzerland, Google may use free-tier prompts to improve its products. |
 | OpenRouter | Pay per use (a fraction of a cent per comparison) | Key from [openrouter.ai/keys](https://openrouter.ai/keys). Set any model, e.g. `deepseek/deepseek-chat`. |
 | Ollama (local) | Free | You must allow extension origins: `OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*"`. Quality is noticeably weaker below ~14B models. |
 | Custom | – | Any OpenAI-compatible `/chat/completions` endpoint. Tampermonkey asks once to allow the host. |
@@ -53,7 +53,7 @@ Each answer is stored in Tampermonkey storage, keyed by the set of WaniKani subj
 
 ## Development
 
-No build step: `wanikani-nuance.user.js` is the source. The pure core (meaning matching, candidate ranking, prompt, cache key, provider request and response handling) is exported to Node for tests.
+No build step: `wanikani-similar-words-explanation.user.js` is the source. The pure core (meaning matching, candidate ranking, prompt, cache key, provider request and response handling) is exported to Node for tests.
 
 ```sh
 npm test                                   # unit + metadata tests

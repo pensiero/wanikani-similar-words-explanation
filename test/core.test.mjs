@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const core = require('../wanikani-nuance.user.js');
+const core = require('../wanikani-similar-words-explanation.user.js');
 
 // Minimal WKOF-shaped items: subject + assignments (+ study_materials).
 function vocab(id, characters, meanings, { reading = 'よみ', level = 5, stage = 5, aux = [], synonyms } = {}) {

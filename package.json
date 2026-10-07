@@ -1,7 +1,7 @@
 {
-  "name": "wanikani-nuance",
+  "name": "wanikani-similar-words-explanation",
   "private": true,
-  "description": "Dev tooling for wanikani-nuance.user.js (tests only; the userscript has no build step).",
+  "description": "Dev tooling for wanikani-similar-words-explanation.user.js (tests only; the userscript has no build step).",
   "license": "MIT",
   "scripts": {
     "test": "node --test",

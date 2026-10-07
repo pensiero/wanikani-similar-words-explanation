@@ -5,7 +5,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
-const core = createRequire(import.meta.url)('../wanikani-nuance.user.js');
+const core = createRequire(import.meta.url)('../wanikani-similar-words-explanation.user.js');
 const provider = process.env.PROVIDER || 'gemini';
 const cfg = {
   apiKey: process.env.API_KEY || '',

@@ -1,9 +1,9 @@
-# WK Nuance: Phase 1 proposal (2026-10-07)
+# WaniKani Similar Words Explanation: Phase 1 proposal (2026-10-07)
 
 > **Decisions (2026-10-07):** build on WKOF + Item Info Injector · Gemini free tier default, OpenRouter later · "learned" = Apprentice 1+ · similarity = shared meanings **+ Kanji Search groups via its JSON endpoint** (not its DOM; replaces the manual picker) · public GitHub + Greasy Fork. Kept for history; the README describes what was built.
 
 
-Working name: **WK Nuance**. For the current vocab item it finds learned vocab with overlapping meanings, and on click it asks an LLM how they differ.
+Working name: **WaniKani Similar Words Explanation**. For the current vocab item it finds learned vocab with overlapping meanings, and on click it asks an LLM how they differ.
 
 ## A. Existing work
 

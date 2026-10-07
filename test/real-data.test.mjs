@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
-const core = createRequire(import.meta.url)('../wanikani-nuance.user.js');
+const core = createRequire(import.meta.url)('../wanikani-similar-words-explanation.user.js');
 const dir = new URL('./fixtures/local/', import.meta.url);
 const present = existsSync(new URL('subjects.json', dir));
 
