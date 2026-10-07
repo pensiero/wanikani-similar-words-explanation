@@ -1,0 +1,153 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const core = require('../wanikani-nuance.user.js');
+
+// Minimal WKOF-shaped items: subject + assignments (+ study_materials).
+function vocab(id, characters, meanings, { reading = 'よみ', level = 5, stage = 5, aux = [], synonyms } = {}) {
+  return {
+    id,
+    object: 'vocabulary',
+    data: {
+      characters,
+      level,
+      meanings: meanings.map((meaning, i) => ({ meaning, primary: i === 0, accepted_answer: true })),
+      auxiliary_meanings: aux,
+      readings: [{ reading, primary: true, accepted_answer: true }],
+      parts_of_speech: ['noun'],
+    },
+    assignments: stage == null ? undefined : { srs_stage: stage },
+    study_materials: synonyms ? { meaning_synonyms: synonyms } : undefined,
+  };
+}
+
+const items = [
+  vocab(1, '必要', ['Necessary', 'Needed', 'Essential'], { reading: 'ひつよう', level: 6 }),
+  vocab(2, '重要', ['Important', 'Essential'], { reading: 'じゅうよう', level: 9 }),
+  vocab(3, '大切', ['Important', 'Precious'], { reading: 'たいせつ', level: 4 }),
+  vocab(4, '不可欠', ['Indispensable', 'Essential'], { level: 30, stage: 0 }), // lesson not done
+  vocab(5, '考える', ['To Think About', 'To Consider'], { reading: 'かんがえる' }),
+  vocab(6, '思う', ['To Think'], { reading: 'おもう' }),
+  vocab(7, '放送する', ['To Broadcast Something'], { aux: [{ meaning: 'To Air', type: 'whitelist' }] }),
+  vocab(8, '伝える', ['To Convey'], { aux: [{ meaning: 'To Broadcast', type: 'blacklist' }], synonyms: ['to air'] }),
+  { ...vocab(9, '隠し', ['Important']), data: { ...vocab(9, '隠し', ['Important']).data, hidden_at: '2020-01-01' } },
+];
+
+test('normalizeMeaning collapses WK phrasing variants', () => {
+  assert.equal(core.normalizeMeaning('To Broadcast Something'), 'broadcast');
+  assert.equal(core.normalizeMeaning('Watch (Clock)'), 'watch');
+  assert.equal(core.normalizeMeaning('  The  End '), 'end');
+  assert.equal(core.normalizeMeaning('To Put Something On'), 'put on');
+});
+
+test('meaningKeys uses whitelist auxiliaries and user synonyms, never blacklist', () => {
+  assert.deepEqual([...core.meaningKeys(items[6])].sort(), ['air', 'broadcast']);
+  assert.deepEqual([...core.meaningKeys(items[7])].sort(), ['air', 'convey']);
+});
+
+test('buildIndex keeps only learned, visible items in the meaning index', () => {
+  const index = core.buildIndex(items);
+  assert.ok(index.learned.has(1));
+  assert.ok(!index.learned.has(4), 'srs_stage 0 is not learned');
+  assert.ok(!index.byId.has(9), 'hidden subjects are dropped');
+  assert.deepEqual([...index.byKey.get('essential')].sort(), [1, 2]);
+});
+
+test('findCandidates ranks shared meanings and skips unlearned words', () => {
+  const index = core.buildIndex(items);
+  const ids = core.findCandidates(index, 1, null).map((c) => c.id);
+  assert.deepEqual(ids, [2]);
+  const fromImportant = core.findCandidates(index, 2, null);
+  // One shared meaning each, so the closer level wins: 必要 (lvl 6) before 大切 (lvl 4) for 重要 (lvl 9).
+  assert.deepEqual(fromImportant.map((c) => c.id), [1, 3]);
+  assert.deepEqual(fromImportant[0].shared, ['essential']);
+});
+
+test('findCandidates merges Kanji Search groups and ignores enumerations', () => {
+  const index = core.buildIndex(items);
+  const ks = {
+    groups: [
+      { id: '考える,思う', entries: [{ characters: '考える', metadata: {} }, { characters: '思う', metadata: {} }] },
+      { id: 'big', entries: Array.from({ length: core.KS_MAX_GROUP_SIZE + 1 }, (_, i) => ({ characters: i ? `x${i}` : '必要', metadata: {} })) },
+      { id: 'notwk', entries: [{ characters: '想う', metadata: { notOnWk: true } }] },
+    ],
+  };
+  const cands = core.findCandidates(index, 6, ks);
+  assert.deepEqual(cands.map((c) => c.id), [5]);
+  assert.equal(cands[0].ksGroupSize, 2);
+  // A word found by both sources outranks one found by meaning only.
+  const both = core.findCandidates(index, 2, { groups: [{ entries: [{ characters: '必要', metadata: {} }, { characters: '重要', metadata: {} }] }] });
+  assert.equal(both[0].id, 1);
+});
+
+test('cacheKey is order-independent and versioned', () => {
+  assert.equal(core.cacheKey([2, 1], 'English'), core.cacheKey([1, 2], ' english '));
+  assert.match(core.cacheKey([1, 2], 'English'), new RegExp(`^cmp:v${core.PROMPT_VERSION}:english:1-2$`));
+  assert.notEqual(core.cacheKey([1, 2], 'English'), core.cacheKey([1, 2], 'Italian'));
+});
+
+test('buildPrompt grounds readings and meanings and sets the language', () => {
+  const words = [items[0], items[1]].map(core.wordInfo);
+  const p = core.buildPrompt(words, 'Italian');
+  assert.match(p.user, /必要 \(ひつよう\): WaniKani meanings: Necessary, Needed, Essential/);
+  assert.match(p.system, /Write every explanation in Italian/);
+  assert.equal(p.schema, core.RESULT_SCHEMA);
+  const chat = core.buildChatPrompt(words, 'English');
+  assert.match(chat, /### When to choose which/);
+  assert.ok(encodeURIComponent(chat).length < 6000, 'prefill URL stays reasonably short');
+});
+
+test('parseResult accepts fenced JSON, coerces and trims lists', () => {
+  const raw = '```json\n' + JSON.stringify({
+    words: [
+      { word: '必要', reading: 'ひつよう', core_meaning: 'needed', register: 'Neutral', register_note: '', contexts: ['a', 'b', 'c', 'd'], collocations: ['必要がある'], example: { ja: '水が必要だ。', translation: 'Water is needed.' } },
+      { word: '重要', reading: 'じゅうよう', core_meaning: 'important', register: 'formal', contexts: [], collocations: [] },
+    ],
+    choose: [{ word: '必要', when: 'need' }, { word: '', when: 'x' }],
+    rule_of_thumb: 'Need vs matter.',
+    common_mistake: '',
+  }) + '\n```';
+  const r = core.parseResult(raw);
+  assert.equal(r.words[0].register, 'neutral');
+  assert.equal(r.words[0].contexts.length, 3);
+  assert.deepEqual(r.words[1].example, { ja: '', translation: '' });
+  assert.equal(r.choose.length, 1);
+  assert.throws(() => core.parseResult('not json'), /valid JSON/);
+  assert.throws(() => core.parseResult('{"words":[{"word":"a"}]}'), /incomplete/);
+});
+
+test('buildRequest: Gemini puts the key in a header and enforces the schema', () => {
+  const prompt = core.buildPrompt([items[0], items[1]].map(core.wordInfo), 'English');
+  const req = core.buildRequest('gemini', { apiKey: 'k', model: 'gemini-x' }, prompt);
+  assert.equal(req.url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-x:generateContent');
+  assert.ok(!req.url.includes('key='));
+  assert.equal(req.headers['x-goog-api-key'], 'k');
+  assert.equal(req.body.generationConfig.responseMimeType, 'application/json');
+  assert.equal(req.body.generationConfig.temperature, 0.2);
+});
+
+test('buildRequest: OpenAI-compatible providers share one format', () => {
+  const prompt = core.buildPrompt([items[0], items[1]].map(core.wordInfo), 'English');
+  const or = core.buildRequest('openrouter', { apiKey: 'k', model: 'm' }, prompt);
+  assert.equal(or.url, 'https://openrouter.ai/api/v1/chat/completions');
+  assert.equal(or.headers.Authorization, 'Bearer k');
+  const ollama = core.buildRequest('ollama', { apiKey: '', model: 'qwen3:14b' }, prompt);
+  assert.equal(ollama.url, 'http://localhost:11434/v1/chat/completions');
+  assert.ok(!('Authorization' in ollama.headers));
+  assert.throws(() => core.buildRequest('custom', { model: 'm' }, prompt), /base URL/);
+});
+
+test('parseResponse extracts text and maps errors', () => {
+  const gem = core.parseResponse('gemini', 200, {
+    candidates: [{ content: { parts: [{ text: 'thinking', thought: true }, { text: '{"a":1}' }] } }],
+    modelVersion: 'gemini-x-001',
+  });
+  assert.deepEqual(gem, { text: '{"a":1}', model: 'gemini-x-001' });
+  const oa = core.parseResponse('openrouter', 200, { choices: [{ message: { content: '{}' } }], model: 'm' });
+  assert.deepEqual(oa, { text: '{}', model: 'm' });
+  assert.throws(() => core.parseResponse('gemini', 429, { error: { message: 'quota' } }), (e) => e.status === 429 && e.message === 'quota');
+  const msg = core.friendlyError(new core.ProviderError(402, 'depleted'));
+  assert.match(msg, /no billing account/);
+});

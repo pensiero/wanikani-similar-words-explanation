@@ -1,0 +1,12 @@
+{
+  "name": "wanikani-nuance",
+  "private": true,
+  "description": "Dev tooling for wanikani-nuance.user.js (tests only; the userscript has no build step).",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test",
+    "fixture": "node tools/fetch-wk-fixture.mjs",
+    "eval": "node tools/eval-prompt.mjs"
+  },
+  "engines": { "node": ">=20" }
+}
