@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WaniKani Similar Words Explanation
 // @namespace    https://github.com/pensiero/wanikani-similar-words-explanation
-// @version      0.4.1
+// @version      0.5.0
 // @description  Lists vocab you have learned that is easy to confuse with the current word (shared meanings + Kanji Search groups) and, on click, asks an LLM how they differ. Answers are cached in your browser.
 // @author       pensiero
 // @license      MIT
@@ -41,7 +41,7 @@
 
   // Bump whenever the prompt or the result schema changes: it is part of the
   // cache key, so old answers stop matching instead of rendering wrongly.
-  const PROMPT_VERSION = 4;
+  const PROMPT_VERSION = 5;
 
   const LEARNED_MIN_SRS_STAGE = 1; // Apprentice 1: confusion starts at first sight
   const MAX_CANDIDATES = 8; // learned words
@@ -268,7 +268,7 @@
       'Each field must add something new. Never restate the gist in the notes, or a note in another note.',
       'If the words overlap or are interchangeable in some contexts, say so. If one word is not really a near-synonym of the others, say so in the gist rather than forcing a contrast.',
       'Often two words mean the same thing and differ mainly in formality or medium: everyday speech vs formal, written, literary or poetic. When that is the main difference, say it plainly in the gist.',
-      'Compare explicitly and by name: "unlike 予想, …", "the opposite of …", "much more formal than …, because …".',
+      'Put the comparisons in the gist and watch_out, explicitly and by name ("the opposite of …", "much more formal than …, because …"). The learner reads every card side by side, so each note describes its own word.',
       'Every Japanese phrase must be grammatical, natural and commonly used. Translations must be natural, not word-for-word. Proofread for typos.',
       `Write all explanations and translations in ${lang}; keep Japanese words, expressions and sentences in Japanese.`,
     ].join('\n');
@@ -285,7 +285,7 @@
       '  - gloss: at most 6 words.',
       `  - register: where the word lives, one of ${REGISTERS.join(', ')}.`,
       `  - everyday: how often you hear it in everyday conversation, one of ${EVERYDAY.join(', ')}.`,
-      '  - note: 1–2 sentences (at most 40 words) on its nuance and what it applies to (people, objects, plans, feelings…), compared by name with at least one other word in the list.',
+      '  - note: 1–2 sentences (at most 40 words) on this word\'s own nuance: what it applies to (people, objects, plans, feelings…) and the situations where you hear it. Do not start with "Unlike…" and do not describe the other words. Name another word only when the two form a pair so tight that it is the key to this word; that is rare.',
       '  - opposite: only a true, commonly paired antonym (e.g. 期待 ↔ 失望, 上る ↔ 下る), with a short gloss in en. Most words have none: then use empty strings. Never pick a merely related word.',
       '  - expressions: 2–3 common set phrases, compounds or collocations that best show this word\'s territory (e.g. 期待外れ, 予想外, 想定内), each with a short gloss in en.',
       '  - example: one short sentence (at most 25 Japanese characters) whose context makes this word\'s specific nuance obvious, so that the other words would not fit as well; natural translation in en.',
@@ -646,6 +646,20 @@
     );
   }
 
+  // OpenAI mark from Simple Icons (CC0), so the button reads at a glance.
+  const CHATGPT_ICON_PATH = 'M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z';
+  function chatIcon() {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('class', 'wksw-icon');
+    const shape = document.createElementNS(ns, 'path');
+    shape.setAttribute('d', CHATGPT_ICON_PATH);
+    svg.append(shape);
+    return svg;
+  }
+
   function toast(message) {
     const el = h('div', { class: 'wksw-toast', role: 'status' }, message);
     document.body.append(el);
@@ -691,7 +705,7 @@
       'div',
       { class: 'wksw-actions' },
       compareBtn,
-      button('Ask ChatGPT', askChat, { title: 'Copy the prompt and open ChatGPT (no API key needed)' }),
+      button([chatIcon(), 'Ask ChatGPT'], askChat, { title: 'Copy the prompt and open ChatGPT (no API key needed)' }),
       button('⚙', openSettings, { title: 'WaniKani Similar Words Explanation settings', 'aria-label': 'Settings' }),
     );
     const root = h('div', { class: 'wksw' }, h('div', { class: 'wksw-chips' }, chipRow), actions, result, status);
@@ -777,7 +791,7 @@
           h('span', { class: 'wksw-error' }, message),
           ' ',
           button('Retry', () => run(force)),
-          button('Ask ChatGPT instead', askChat),
+          button([chatIcon(), 'Ask ChatGPT instead'], askChat),
         );
       }
     }
@@ -806,6 +820,13 @@
           w.register && h('span', { class: `wksw-register-${w.register}` }, w.register),
         );
       };
+      // Only words we actually compared get a link; the model may echo a variant spelling.
+      const title = (w) => {
+        const word = h('span', { lang: 'ja', class: 'wksw-ja' }, w.word);
+        if (!entry.words.includes(w.word)) return word;
+        const href = `${location.origin}/vocabulary/${encodeURIComponent(w.word)}`;
+        return h('a', { href, target: '_blank', rel: 'noopener', class: 'wksw-word-link', title: `Open ${w.word} on WaniKani` }, word);
+      };
       const providerLabel = (PROVIDERS[entry.provider] || {}).label || entry.provider;
       result.replaceChildren(
         r.gist && h('p', { class: 'wksw-gist' }, r.gist),
@@ -819,7 +840,7 @@
               h(
                 'div',
                 { class: 'wksw-word-top' },
-                h('div', { class: 'wksw-word-head' }, h('span', { lang: 'ja', class: 'wksw-ja' }, w.word), h('span', { lang: 'ja', class: 'wksw-reading' }, w.reading)),
+                h('div', { class: 'wksw-word-head' }, title(w), h('span', { lang: 'ja', class: 'wksw-reading' }, w.reading)),
                 w.gloss && h('div', { class: 'wksw-gloss' }, w.gloss),
                 usage(w),
               ),
@@ -845,7 +866,7 @@
           { class: 'wksw-footer' },
           h('span', { class: 'wksw-muted' }, `${providerLabel} · ${entry.model} · ${new Date(entry.createdAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}`),
           button('Regenerate', () => run(true)),
-          button('Ask ChatGPT', askChat),
+          button([chatIcon(), 'Ask ChatGPT'], askChat),
         ),
       );
     }
@@ -1013,6 +1034,9 @@
     .wksw-word-top { padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
     .wksw-section-title { font-size: 16px; font-weight: 600; margin: 14px 0 4px; padding: 0; border: none; letter-spacing: normal; text-transform: none; }
     .wksw-ja { font-size: 22px; }
+    .wksw-word-link { color: inherit; text-decoration: none; }
+    .wksw-word-link:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+    .wksw-icon { width: 14px; height: 14px; fill: currentColor; vertical-align: -2px; margin-right: 5px; }
     .wksw-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; margin-right: 6px; }
     .wksw-footer { margin-top: 8px; }
     .wksw-gist { font-size: 16px; font-weight: 600; margin: 16px 0 10px; }

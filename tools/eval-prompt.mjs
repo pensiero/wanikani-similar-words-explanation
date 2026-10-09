@@ -15,7 +15,7 @@ const cfg = {
 const language = process.env.LANG_OUT || 'English';
 
 const PAIRS = [
-  ['期待', '予想', '想定'], ['代用', '代わり', '変化', '交代'],
+  ['期待', '予想', '想定'], ['代用', '代わり', '変化', '交代'], ['完了', '完全', '完成', '完結'],
   ['必要', '重要'], ['思う', '考える'], ['早い', '速い'], ['決める', '決定する'], ['上る', '登る'],
   ['大切', '大事'], ['始める', '始まる'], ['見る', '見える'], ['会う', '合う'], ['幸せ', '幸福'],
 ];
@@ -55,17 +55,20 @@ for (const pair of PAIRS) {
     run.exampleChars = run.result.scene.lines.map((l) => l.ja.replace(/\*\*/g, '').length);
     const sentences = [...run.result.words.map((w) => w.example.ja), ...run.result.scene.lines.map((l) => l.ja)].filter(Boolean);
     run.marked = `${sentences.filter((t) => /\*\*[^*]+\*\*/.test(t)).length}/${sentences.length}`;
+    // Notes should stand on their own; cross-references belong in gist and watch_out.
+    run.crossNotes = `${run.result.words.filter((w) => /^unlike/i.test(w.note) || pair.some((o) => o !== w.word && w.note.includes(o))).length}/${run.result.words.length}`;
     run.usage = json.usageMetadata || json.usage;
   } catch (e) {
     run.error = e.message;
   }
   runs.push(run);
-  console.log(`${run.pair.padEnd(12)} ${String(run.status).padEnd(4)} ${String(ms).padStart(5)}ms ${run.error ? 'ERROR ' + run.error : `${run.explanationWords} words, scene lines ${run.exampleChars.join('/')} chars, marked ${run.marked}`}`);
+  console.log(`${run.pair.padEnd(12)} ${String(run.status).padEnd(4)} ${String(ms).padStart(5)}ms ${run.error ? 'ERROR ' + run.error : `${run.explanationWords} words, scene lines ${run.exampleChars.join('/')} chars, marked ${run.marked}, notes naming others ${run.crossNotes}`}`);
   if (res.status === 402 || res.status === 401 || res.status === 403) break;
 }
 
 const ok = runs.filter((r) => !r.error);
 console.log(`\nvalid ${ok.length}/${runs.length}; over 250 words: ${ok.filter((r) => r.explanationWords > 250).length}; median latency ${runs.map((r) => r.ms).sort((a, b) => a - b)[Math.floor(runs.length / 2)] || 0}ms`);
+if (!ok.length) process.exit(1); // keep the last good output
 const out = new URL(`eval-${provider}-${cfg.model.replace(/\W+/g, '_')}.json`, dir);
 writeFileSync(out, JSON.stringify(runs, null, 1));
 console.log(`full output: ${out.pathname}`);
