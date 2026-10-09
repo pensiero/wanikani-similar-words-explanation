@@ -6,7 +6,7 @@ A Tampermonkey userscript for [WaniKani](https://www.wanikani.com). For the voca
 - for each word:
   - reading and a short gloss
   - how often you hear it in conversation (●●●○) and its register
-  - a note that compares it by name with the other words
+  - a short note on its own nuance (the card title links to the word's WaniKani page)
   - a true opposite, when one exists
   - 2–3 key expressions (期待外れ, 予想外, 想定内 …)
   - a short example sentence whose context makes the nuance obvious
@@ -23,6 +23,8 @@ It combines two sources:
 2. **[Kanji Search](https://www.kanjisearch.com) groups.** These are hand-curated groups of related words from [Kanji Search Notes](https://greasyfork.org/scripts/444554-kanji-search-notes) by Mark Hennessy. They catch near-synonyms whose English glosses differ, such as 思う / 考える. Large enumerations (numbers, planets, days) are skipped. You can turn this source off in Settings.
 
 Up to 8 learned candidates appear as chips. Up to 4 strong matches you **haven't learned yet** follow them, with a dashed outline and their level; they can be compared too. Pick one to three, then click **Explain the difference**. A dot on a chip means that pair is already cached.
+
+If you get a review wrong by typing another learned word's meaning or reading ("early" for 速い), that word is listed first and pre-selected, with a line saying whose answer you gave.
 
 The section sits under **Meaning** in the item info. In reviews it only appears after you've answered, so it never gives the meaning away. Its buttons never take keyboard focus, so Enter still moves to the next item.
 

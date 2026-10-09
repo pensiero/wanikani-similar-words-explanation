@@ -90,6 +90,31 @@ test('findCandidates lists strong unlearned words after the learned ones', () =>
   assert.deepEqual(cands.map((c) => [c.id, c.learned]), [[2, true], [4, false]]);
 });
 
+test('markConfusion puts the word whose meaning or reading the user typed first', () => {
+  const index = core.buildIndex(items);
+  const cands = core.findCandidates(index, 2, null); // 重要: [必要, 大切]
+  const mixed = core.markConfusion(index, 2, cands, 'precious', 'meaning');
+  assert.deepEqual(mixed.map((c) => c.id), [3, 1]);
+  assert.deepEqual(mixed[0].confused, { answer: 'precious', questionType: 'meaning' });
+  assert.equal(core.markConfusion(index, 2, cands, 'Important', 'meaning'), cands, 'a right answer changes nothing');
+  assert.equal(core.markConfusion(index, 2, cands, 'banana', 'meaning'), cands);
+  assert.equal(core.markConfusion(index, 2, cands, 'たいせつ', 'reading')[0].id, 3);
+  assert.equal(core.markConfusion(index, 2, cands, '', 'meaning'), cands);
+});
+
+test('markConfusion pulls in a non-candidate only when it shares a kanji or reading', () => {
+  const extra = [
+    ...items,
+    vocab(11, '必死', ['Desperate'], { reading: 'ひっし', level: 7 }),
+    vocab(12, '必ず', ['Certainly'], { reading: 'かならず', level: 30, stage: 0 }),
+    vocab(13, '絶望', ['Desperate'], { reading: 'ぜつぼう', level: 20 }),
+  ];
+  const index = core.buildIndex(extra);
+  const cands = core.findCandidates(index, 1, null);
+  assert.equal(core.markConfusion(index, 1, cands, 'desperate', 'meaning')[0].id, 11, '必死 shares 必; 絶望 does not');
+  assert.equal(core.markConfusion(index, 1, cands, 'certainly', 'meaning'), cands, '必ず is not learned');
+});
+
 test('highlightParts uses the model markers, else the word or its kanji stem', () => {
   assert.deepEqual(core.highlightParts('雨を**想定して**傘を持つ。', '想定'), [
     { text: '雨を', bold: false }, { text: '想定して', bold: true }, { text: '傘を持つ。', bold: false },

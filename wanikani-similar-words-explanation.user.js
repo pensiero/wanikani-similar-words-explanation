@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WaniKani Similar Words Explanation
 // @namespace    https://github.com/pensiero/wanikani-similar-words-explanation
-// @version      0.5.0
+// @version      0.6.0
 // @description  Lists vocab you have learned that is easy to confuse with the current word (shared meanings + Kanji Search groups) and, on click, asks an LLM how they differ. Answers are cached in your browser.
 // @author       pensiero
 // @license      MIT
@@ -213,6 +213,41 @@
       ...ranked.filter((e) => e.learned).slice(0, MAX_CANDIDATES),
       ...ranked.filter((e) => !e.learned && e.score >= UNLEARNED_MIN_SCORE).slice(0, MAX_UNLEARNED),
     ];
+  }
+
+  // After a review answer: if what the user typed is another learned word's meaning
+  // (or reading) and not this word's, that word is the one they mixed up. It goes
+  // first, flagged. A word outside the candidates only counts when it shares a kanji
+  // or a reading with this one, since a generic meaning like "end" matches dozens.
+  function markConfusion(index, id, candidates, answer, questionType) {
+    const item = index.byId.get(id);
+    const typed = String(answer || '').trim();
+    if (!item || !typed || !['meaning', 'reading'].includes(questionType)) return candidates;
+    const key = normalizeMeaning(typed);
+    const matches = questionType === 'meaning'
+      ? (other) => meaningKeys(other).has(key)
+      : (other) => wordInfo(other).readings.includes(typed);
+    if (matches(item)) return candidates; // right answer (or a synonym of this word)
+
+    const current = wordInfo(item);
+    const kanji = new Set(current.characters.match(/\p{Script=Han}/gu) || []);
+    const related = (other) => {
+      const w = wordInfo(other);
+      return [...w.characters].some((ch) => kanji.has(ch)) || w.readings.some((r) => current.readings.includes(r));
+    };
+    // 速い answered "early": 早い (same reading) over 早く, though both mean "early".
+    const matching = candidates.filter((c) => c.learned && matches(index.byId.get(c.id)));
+    let hit = matching.find((c) => related(index.byId.get(c.id))) || matching[0];
+    if (!hit) {
+      const pool = questionType === 'meaning' ? [...(index.byKey.get(key) || [])] : [...index.learned];
+      const otherId = pool
+        .filter((oid) => oid !== id && index.learned.has(oid))
+        .filter((oid) => matches(index.byId.get(oid)) && related(index.byId.get(oid)))
+        .sort((a, b) => Math.abs(index.byId.get(a).data.level - item.data.level) - Math.abs(index.byId.get(b).data.level - item.data.level) || a - b)[0];
+      if (otherId == null) return candidates;
+      hit = { id: otherId, learned: true, shared: [], ksGroupSize: null, score: 0, word: wordInfo(index.byId.get(otherId)) };
+    }
+    return [{ ...hit, confused: { answer: typed, questionType } }, ...candidates.filter((c) => c.id !== hit.id)];
   }
 
   // Splits a Japanese sentence into plain and bold parts. The model marks the word
@@ -465,7 +500,7 @@
     module.exports = {
       PROMPT_VERSION, MAX_CANDIDATES, KS_MAX_GROUP_SIZE, RESULT_SCHEMA, PROVIDERS, ProviderError,
       MAX_UNLEARNED, UNLEARNED_MIN_SCORE, EVERYDAY,
-      normalizeMeaning, meaningKeys, wordInfo, isLearned, buildIndex, findCandidates, highlightParts, cacheKey,
+      normalizeMeaning, meaningKeys, wordInfo, isLearned, buildIndex, findCandidates, markConfusion, highlightParts, cacheKey,
       buildPrompt, buildChatPrompt, parseResult, buildRequest, parseResponse, friendlyError,
     };
     return;
@@ -686,7 +721,7 @@
         ],
         () => toggle(c.id),
         {
-          class: `wksw-btn wksw-chip${c.learned ? '' : ' wksw-unlearned'}`,
+          class: `wksw-btn wksw-chip${c.learned ? '' : ' wksw-unlearned'}${c.confused ? ' wksw-confused' : ''}`,
           title: `${c.word.readings[0]} · ${why}${c.learned ? '' : ` · not learned yet (level ${c.word.level})`}`,
           'data-id': String(c.id),
         },
@@ -708,7 +743,17 @@
       button([chatIcon(), 'Ask ChatGPT'], askChat, { title: 'Copy the prompt and open ChatGPT (no API key needed)' }),
       button('⚙', openSettings, { title: 'WaniKani Similar Words Explanation settings', 'aria-label': 'Settings' }),
     );
-    const root = h('div', { class: 'wksw' }, h('div', { class: 'wksw-chips' }, chipRow), actions, result, status);
+    const mixup = candidates[0].confused;
+    const hint = mixup && h(
+      'p',
+      { class: 'wksw-hint' },
+      'You answered ',
+      h('b', { lang: 'ja' }, mixup.answer),
+      `, a ${mixup.questionType} of `,
+      h('b', { lang: 'ja' }, candidates[0].word.characters),
+      '.',
+    );
+    const root = h('div', { class: 'wksw' }, hint, h('div', { class: 'wksw-chips' }, chipRow), actions, result, status);
 
     const language = () => normalizeLanguage(loadSettings().language);
     const selectedIds = () => [currentId, ...selected];
@@ -879,6 +924,14 @@
     return Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(null), ms))]);
   }
 
+  // WK leaves the submitted answer in the quiz input while item info is open.
+  function reviewAnswer(state) {
+    if (!['review', 'lessonQuiz', 'extraStudy'].includes(state.on)) return null;
+    const input = document.querySelector('#user-response');
+    const label = document.querySelector('[for=user-response]');
+    return input && label ? { answer: input.value, questionType: label.dataset.questionType } : null;
+  }
+
   async function buildSection(state) {
     let index;
     try {
@@ -895,7 +948,8 @@
     }
     const settings = loadSettings();
     const ksNote = settings.kanjiSearch ? await withTimeout(fetchKanjiSearchNote(state.characters), KS_TIMEOUT_MS) : null;
-    const candidates = findCandidates(index, state.id, ksNote);
+    const typed = reviewAnswer(state);
+    const candidates = markConfusion(index, state.id, findCandidates(index, state.id, ksNote), typed && typed.answer, typed && typed.questionType);
     return candidates.length ? createPanel(index, state.id, candidates) : null;
   }
 
@@ -1051,6 +1105,8 @@
     .wksw-unlearned[aria-pressed="true"] { opacity: 1; }
     .wksw-chip-level { font-size: 11px; margin-left: 4px; opacity: 0.7; }
     .wksw-divider { align-self: center; margin-left: 4px; }
+    .wksw-hint { margin: 0 0 8px; padding: 4px 10px; border-left: 3px solid #a100f1; }
+    .wksw-confused:not([aria-pressed="true"]) { border-color: #a100f1; }
     .wksw-note { margin: 4px 0 6px; }
     .wksw-expressions { list-style: none; margin: 0; padding: 0; }
     .wksw-expressions li { margin: 2px 0; }
