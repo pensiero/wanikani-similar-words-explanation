@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WaniKani Similar Words Explanation
 // @namespace    https://github.com/pensiero/wanikani-similar-words-explanation
-// @version      0.6.0
+// @version      0.6.1
 // @description  Lists vocab you have learned that is easy to confuse with the current word (shared meanings + Kanji Search groups) and, on click, asks an LLM how they differ. Answers are cached in your browser.
 // @author       pensiero
 // @license      MIT
@@ -681,17 +681,24 @@
     );
   }
 
-  // OpenAI mark from Simple Icons (CC0), so the button reads at a glance.
-  const CHATGPT_ICON_PATH = 'M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z';
-  function chatIcon() {
+  // OpenAI mark from Simple Icons (CC0); sparkles and settings from Lucide (ISC).
+  // Filled icons use fill, Lucide's are 2px strokes.
+  const ICONS = {
+    chatgpt: { fill: true, paths: ['M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z'] },
+    sparkles: { paths: ['M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z', 'M20 3v4', 'M22 5h-4', 'M4 17v2', 'M5 18H3'] },
+    settings: { paths: ['M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z', 'M15 12a3 3 0 1 1-6 0 3 3 0 1 1 6 0z'] },
+  };
+  function icon(name) {
     const ns = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(ns, 'svg');
     svg.setAttribute('viewBox', '0 0 24 24');
     svg.setAttribute('aria-hidden', 'true');
-    svg.setAttribute('class', 'wksw-icon');
-    const shape = document.createElementNS(ns, 'path');
-    shape.setAttribute('d', CHATGPT_ICON_PATH);
-    svg.append(shape);
+    svg.setAttribute('class', `wksw-icon${ICONS[name].fill ? ' wksw-icon-fill' : ''}`);
+    for (const d of ICONS[name].paths) {
+      const shape = document.createElementNS(ns, 'path');
+      shape.setAttribute('d', d);
+      svg.append(shape);
+    }
     return svg;
   }
 
@@ -735,13 +742,13 @@
 
     const status = h('div', { class: 'wksw-status', 'aria-live': 'polite' });
     const result = h('div', { class: 'wksw-result' });
-    const compareBtn = button('Explain the difference', () => run(false), { class: 'wksw-btn wksw-primary' });
+    const compareBtn = button([icon('sparkles'), 'Explain the difference'], () => run(false), { class: 'wksw-btn wksw-primary' });
     const actions = h(
       'div',
       { class: 'wksw-actions' },
       compareBtn,
-      button([chatIcon(), 'Ask ChatGPT'], askChat, { title: 'Copy the prompt and open ChatGPT (no API key needed)' }),
-      button('⚙', openSettings, { title: 'WaniKani Similar Words Explanation settings', 'aria-label': 'Settings' }),
+      button([icon('chatgpt'), 'Ask ChatGPT'], askChat, { title: 'Copy the prompt and open ChatGPT (no API key needed)' }),
+      button(icon('settings'), openSettings, { class: 'wksw-btn wksw-ghost', title: 'WaniKani Similar Words Explanation settings', 'aria-label': 'Settings' }),
     );
     const mixup = candidates[0].confused;
     const hint = mixup && h(
@@ -836,7 +843,7 @@
           h('span', { class: 'wksw-error' }, message),
           ' ',
           button('Retry', () => run(force)),
-          button([chatIcon(), 'Ask ChatGPT instead'], askChat),
+          button([icon('chatgpt'), 'Ask ChatGPT instead'], askChat),
         );
       }
     }
@@ -911,7 +918,7 @@
           { class: 'wksw-footer' },
           h('span', { class: 'wksw-muted' }, `${providerLabel} · ${entry.model} · ${new Date(entry.createdAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}`),
           button('Regenerate', () => run(true)),
-          button([chatIcon(), 'Ask ChatGPT'], askChat),
+          button([icon('chatgpt'), 'Ask ChatGPT'], askChat),
         ),
       );
     }
@@ -1072,11 +1079,17 @@
       border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: 6px; padding: 3px 10px; }
     .wksw-btn:hover { border-color: currentColor; }
     .wksw-btn[disabled] { opacity: 0.5; cursor: default; }
-    .wksw-chip[aria-pressed="true"] { background: #a100f1; border-color: #a100f1; color: #fff; }
+    .wksw-chip[aria-pressed="true"] { background: color-mix(in srgb, #a100f1 14%, transparent); border-color: #a100f1; box-shadow: inset 0 0 0 1px #a100f1; }
     .wksw-chip.wksw-cached::after { content: '•'; margin-left: 4px; }
     .wksw-chip-ja { font-size: 16px; }
     .wksw-chip-meaning { opacity: 0.75; }
-    .wksw-primary { font-weight: 600; }
+    .wksw-primary { font-weight: 600; font-size: 15px; padding: 6px 16px; background: #a100f1; border-color: #a100f1; color: #fff;
+      box-shadow: 0 1px 3px rgb(0 0 0 / 0.2); }
+    .wksw-primary:hover { background: #8a00cf; border-color: #8a00cf; }
+    .wksw-primary .wksw-icon { width: 16px; height: 16px; vertical-align: -3px; }
+    .wksw-ghost { border-color: transparent; opacity: 0.6; padding: 3px 6px; }
+    .wksw-ghost:hover { border-color: transparent; opacity: 1; }
+    .wksw-ghost .wksw-icon { margin-right: 0; width: 16px; height: 16px; }
     .wksw-actions, .wksw-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     .wksw-status { margin: 6px 0; min-height: 1em; }
     .wksw-status .wksw-btn { margin-left: 4px; }
@@ -1090,7 +1103,8 @@
     .wksw-ja { font-size: 22px; }
     .wksw-word-link { color: inherit; text-decoration: none; }
     .wksw-word-link:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
-    .wksw-icon { width: 14px; height: 14px; fill: currentColor; vertical-align: -2px; margin-right: 5px; }
+    .wksw-icon { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -2px; margin-right: 5px; }
+    .wksw-icon-fill { fill: currentColor; stroke: none; }
     .wksw-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; margin-right: 6px; }
     .wksw-footer { margin-top: 8px; }
     .wksw-gist { font-size: 16px; font-weight: 600; margin: 16px 0 10px; }
@@ -1106,7 +1120,6 @@
     .wksw-chip-level { font-size: 11px; margin-left: 4px; opacity: 0.7; }
     .wksw-divider { align-self: center; margin-left: 4px; }
     .wksw-hint { margin: 0 0 8px; padding: 4px 10px; border-left: 3px solid #a100f1; }
-    .wksw-confused:not([aria-pressed="true"]) { border-color: #a100f1; }
     .wksw-note { margin: 4px 0 6px; }
     .wksw-expressions { list-style: none; margin: 0; padding: 0; }
     .wksw-expressions li { margin: 2px 0; }
