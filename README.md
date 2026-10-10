@@ -34,7 +34,7 @@ The section sits under **Meaning** in the item info. In reviews it only appears 
    - **Chrome / Edge 138+:** open Tampermonkey's extension details (right-click the icon → *Manage extension*) and turn on **Allow User Scripts**. On older versions, enable *Developer mode* on the extensions page instead. Without this, no userscript runs.
    - **Firefox:** nothing extra.
 2. Install the [WaniKani Open Framework](https://community.wanikani.com/t/instructions-installing-wanikani-open-framework/28549) if you don't have it yet.
-3. Install **WaniKani Similar Words Explanation** from Greasy Fork (link coming), or from [GitHub](https://raw.githubusercontent.com/pensiero/wanikani-similar-words-explanation/main/wanikani-similar-words-explanation.user.js).
+3. **[Click here to install WaniKani Similar Words Explanation](https://raw.githubusercontent.com/pensiero/wanikani-similar-words-explanation/main/wanikani-similar-words-explanation.user.js)**. Tampermonkey opens an install page; click *Install*. The script updates itself from the same address.
 4. Get an LLM API key (see below), then on any WaniKani page open Tampermonkey's menu → **WaniKani Similar Words Explanation → Settings** and paste it in.
 
 ### LLM providers
