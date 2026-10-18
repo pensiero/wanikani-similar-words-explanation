@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WaniKani Similar Words Explanation
 // @namespace    https://github.com/pensiero/wanikani-similar-words-explanation
-// @version      0.7.0
+// @version      0.7.1
 // @description  Lists vocab you have learned that is easy to confuse with the current word (shared meanings + Kanji Search groups) and, on click, asks an LLM how they differ. Answers are cached in your browser.
 // @author       pensiero
 // @license      MIT
@@ -733,9 +733,13 @@
       else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
       else el.setAttribute(k, v === true ? '' : v);
     }
-    for (const c of children.flat(Infinity)) {
-      if (c != null && c !== false && c !== '') el.append(c);
-    }
+    return fill(el, ...children);
+  }
+
+  // Like replaceChildren, but takes nested arrays and skips the leftovers of
+  // `cond && node` (false, null, '', 0) instead of printing them.
+  function fill(el, ...children) {
+    el.replaceChildren(...children.flat(Infinity).filter((c) => c != null && c !== false && c !== '' && c !== 0));
     return el;
   }
 
@@ -846,7 +850,8 @@
       const addedChips = added.map(chipFor);
       const unlearnedChips = unlearned.map(chipFor);
       chips = [...learnedChips, ...addedChips, ...unlearnedChips];
-      chipBox.replaceChildren(
+      fill(
+        chipBox,
         !candidates.length && !custom.length && h('span', { class: 'wksw-muted wksw-divider' }, 'No similar words found.'),
         learnedChips,
         addedChips.map((chip, i) =>
@@ -1064,7 +1069,8 @@
       };
       const RELATION_LABELS = { 'near-synonyms': 'Near-synonyms', related: 'Related, but not interchangeable', different: 'Different meanings' };
       const providerLabel = (PROVIDERS[entry.provider] || {}).label || entry.provider;
-      result.replaceChildren(
+      fill(
+        result,
         r.relation && h('div', { class: `wksw-relation wksw-relation-${r.relation}` }, RELATION_LABELS[r.relation]),
         r.gist && h('p', { class: 'wksw-gist' }, r.gist),
         h(
