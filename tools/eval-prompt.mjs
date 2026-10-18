@@ -18,6 +18,7 @@ const PAIRS = [
   ['期待', '予想', '想定'], ['代用', '代わり', '変化', '交代'], ['完了', '完全', '完成', '完結'],
   ['必要', '重要'], ['思う', '考える'], ['早い', '速い'], ['決める', '決定する'], ['上る', '登る'],
   ['大切', '大事'], ['始める', '始まる'], ['見る', '見える'], ['会う', '合う'], ['幸せ', '幸福'],
+  ['混ざる', '交わる'], ['混ざる', '交じる', '混じる'], ['必要', '上る'], // the last one is not a near-synonym pair
 ];
 
 const dir = new URL('../test/fixtures/local/', import.meta.url);
@@ -62,7 +63,7 @@ for (const pair of PAIRS) {
     run.error = e.message;
   }
   runs.push(run);
-  console.log(`${run.pair.padEnd(12)} ${String(run.status).padEnd(4)} ${String(ms).padStart(5)}ms ${run.error ? 'ERROR ' + run.error : `${run.explanationWords} words, scene lines ${run.exampleChars.join('/')} chars, marked ${run.marked}, notes naming others ${run.crossNotes}`}`);
+  console.log(`${run.pair.padEnd(12)} ${String(run.status).padEnd(4)} ${String(ms).padStart(5)}ms ${run.error ? 'ERROR ' + run.error : `${run.result.relation || 'no relation'}, ${run.explanationWords} words, scene lines ${run.exampleChars.join('/')} chars, marked ${run.marked}, notes naming others ${run.crossNotes}`}`);
   if (res.status === 402 || res.status === 401 || res.status === 403) break;
 }
 

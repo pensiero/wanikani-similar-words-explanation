@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WaniKani Similar Words Explanation
 // @namespace    https://github.com/pensiero/wanikani-similar-words-explanation
-// @version      0.6.1
+// @version      0.7.0
 // @description  Lists vocab you have learned that is easy to confuse with the current word (shared meanings + Kanji Search groups) and, on click, asks an LLM how they differ. Answers are cached in your browser.
 // @author       pensiero
 // @license      MIT
@@ -21,6 +21,7 @@
 // @connect      generativelanguage.googleapis.com
 // @connect      openrouter.ai
 // @connect      www.kanjisearch.com
+// @connect      jisho.org
 // @connect      localhost
 // @connect      127.0.0.1
 // @homepageURL  https://github.com/pensiero/wanikani-similar-words-explanation
@@ -41,7 +42,7 @@
 
   // Bump whenever the prompt or the result schema changes: it is part of the
   // cache key, so old answers stop matching instead of rendering wrongly.
-  const PROMPT_VERSION = 5;
+  const PROMPT_VERSION = 6;
 
   const LEARNED_MIN_SRS_STAGE = 1; // Apprentice 1: confusion starts at first sight
   const MAX_CANDIDATES = 8; // learned words
@@ -50,9 +51,12 @@
   const MAX_SELECTED = 3; // compared words besides the current one
   const KS_MAX_GROUP_SIZE = 6; // larger Kanji Search groups are enumerations (numbers, planets, days)
   const CACHE_PREFIX = 'cmp:';
+  const CUSTOM_PREFIX = 'custom:'; // words the user added to a subject's comparison
 
   const REGISTERS = ['casual', 'neutral', 'formal', 'written', 'literary'];
   const EVERYDAY = ['very common', 'common', 'occasional', 'rare']; // how often you hear it in conversation
+  // Added words can be anything, so the answer says up front how close they really are.
+  const RELATIONS = ['near-synonyms', 'related', 'different'];
 
   // Contrast-first: one gist, a short note per word, one shared scene. Every field
   // must add something the others don't; v1/v2 had four fields restating the same
@@ -60,6 +64,7 @@
   const RESULT_SCHEMA = {
     type: 'object',
     properties: {
+      relation: { type: 'string', enum: RELATIONS },
       gist: { type: 'string' },
       words: {
         type: 'array',
@@ -103,7 +108,7 @@
       },
       watch_out: { type: 'string' },
     },
-    required: ['gist', 'words', 'scene', 'watch_out'],
+    required: ['relation', 'gist', 'words', 'scene', 'watch_out'],
   };
 
   // "To Broadcast Something" and "broadcast" must collide; "Watch (Clock)" and "watch" too.
@@ -193,10 +198,12 @@
       }
     }
     for (const group of (ksNote && ksNote.groups) || []) {
-      const size = group.entries.length;
+      // Count only entries on WK: 交わす (not on WK) made the 交/混 family of 7 look
+      // like an enumeration and hid 交わる from 混ざる.
+      const onWk = group.entries.filter((e) => !(e.metadata && e.metadata.notOnWk));
+      const size = onWk.length;
       if (size > KS_MAX_GROUP_SIZE) continue;
-      for (const ksEntry of group.entries) {
-        if (ksEntry.metadata && ksEntry.metadata.notOnWk) continue;
+      for (const ksEntry of onWk) {
         for (const otherId of index.byChars.get(ksEntry.characters) || []) {
           const e = entry(otherId);
           if (e) e.ksGroupSize = Math.min(e.ksGroupSize || Infinity, size);
@@ -278,17 +285,62 @@
     return (language || 'English').trim() || 'English';
   }
 
+  // WK subject ids are numbers; added words not on WK have string ids ("x:交わす").
+  // Numbers first, so a WK-only set keeps the order and cache key it always had.
+  function compareIds(a, b) {
+    if (typeof a === 'number' && typeof b === 'number') return a - b;
+    if (typeof a === 'number') return -1;
+    if (typeof b === 'number') return 1;
+    return a < b ? -1 : a > b ? 1 : 0;
+  }
+
   // Order-independent on purpose: the prompt treats all words symmetrically.
   function cacheKey(ids, language) {
-    const sorted = [...new Set(ids)].sort((a, b) => a - b);
+    const sorted = [...new Set(ids)].sort(compareIds);
     return `${CACHE_PREFIX}v${PROMPT_VERSION}:${normalizeLanguage(language).toLowerCase()}:${sorted.join('-')}`;
+  }
+
+  // A Jisho (JMdict) search response as a word shaped like wordInfo, or null.
+  // Jisho also returns loose matches (ふがくくっ → 負), so a kana or kanji query must
+  // match a form exactly. Romaji has no exact form to check, so its top hit is used.
+  function dictionaryWord(json, query) {
+    const q = String(query || '').trim();
+    const hits = json && Array.isArray(json.data) ? json.data : [];
+    const romaji = /^[a-z][a-z\s'-]*$/i.test(q);
+    for (const hit of hits) {
+      const forms = hit.japanese || [];
+      const form = romaji ? forms[0] : forms.find((f) => f.word === q || f.reading === q);
+      if (!form) continue;
+      const characters = form.word || form.reading;
+      const readings = [...new Set(forms.filter((f) => (f.word || f.reading) === characters).map((f) => f.reading).filter(Boolean))];
+      const senses = (hit.senses || []).filter((s) => !(s.parts_of_speech || []).includes('Wikipedia definition'));
+      return {
+        id: `x:${characters}`,
+        characters,
+        readings: readings.length ? readings : [characters],
+        meanings: senses.slice(0, 3).flatMap((s) => (s.english_definitions || []).slice(0, 2)),
+        partsOfSpeech: (senses[0] && senses[0].parts_of_speech) || [],
+        level: null,
+        source: 'dictionary',
+      };
+    }
+    return null;
+  }
+
+  // A word the user insists on comparing although no dictionary knows it.
+  function unknownWord(text) {
+    const characters = String(text).trim();
+    return { id: `x:${characters}`, characters, readings: [], meanings: [], partsOfSpeech: [], level: null, source: 'unknown' };
   }
 
   function describeWords(words) {
     return words
       .map((w) => {
         const pos = w.partsOfSpeech.length ? `; part of speech: ${w.partsOfSpeech.join(', ')}` : '';
-        return `- ${w.characters} (${w.readings.join('、')}): WaniKani meanings: ${w.meanings.join(', ')}${pos}`;
+        const reading = w.readings.length ? ` (${w.readings.join('、')})` : '';
+        if (w.source === 'unknown') return `- ${w.characters}: not found on WaniKani or in a dictionary`;
+        if (w.source === 'dictionary') return `- ${w.characters}${reading}: not on WaniKani; dictionary meanings: ${w.meanings.join(', ')}${pos}`;
+        return `- ${w.characters}${reading}: WaniKani meanings: ${w.meanings.join(', ')}${pos}`;
       })
       .join('\n');
   }
@@ -310,11 +362,14 @@
     const user = [
       'Compare these Japanese words that a learner keeps confusing:',
       describeWords(words),
+      words.some((w) => w.source === 'unknown') &&
+        'A word marked "not found" may be a typo, a rare word or not a word at all. If it is not a real word, say so in the gist and in its note, and name the word the learner probably meant.',
       '',
       'Respond with JSON only, in this shape:',
-      '{"gist":"","words":[{"word":"","reading":"","gloss":"","register":"","everyday":"","note":"","opposite":{"ja":"","en":""},"expressions":[{"ja":"","en":""}],"example":{"ja":"","en":""}}],"scene":{"setup":"","lines":[{"word":"","ja":"","en":""}]},"watch_out":""}',
+      '{"relation":"","gist":"","words":[{"word":"","reading":"","gloss":"","register":"","everyday":"","note":"","opposite":{"ja":"","en":""},"expressions":[{"ja":"","en":""}],"example":{"ja":"","en":""}}],"scene":{"setup":"","lines":[{"word":"","ja":"","en":""}]},"watch_out":""}',
       '',
       'Fields:',
+      '- relation: how close the words really are. near-synonyms: interchangeable in at least some contexts. related: same area of meaning or a shared kanji, but not interchangeable. different: unrelated meanings. With three or more words, judge by the word that fits least.',
       '- gist: one sentence (at most 30 words) that contrasts all the words at once, e.g. "期待 is what you hope will happen, 予想 what you think will happen, 想定 what you assume so you can plan for it."',
       '- words: one entry per word above, in the same order.',
       '  - gloss: at most 6 words.',
@@ -328,7 +383,7 @@
       '- In every Japanese example and scene sentence, wrap the compared word, exactly as it appears in the sentence including its inflection, in double asterisks, e.g. 雨を**想定して**傘を持ってきた。',
       '- watch_out: the single most useful extra contrast or trap (e.g. 予想外 "didn\'t see it coming" vs 想定外 "not in our plan", or a different word the learner may actually mean), at most 35 words. Leave it empty rather than inventing one.',
       '- Keep the whole answer under 250 words of explanation.',
-    ].join('\n');
+    ].filter((line) => line !== false).join('\n');
     return { system, user, schema: RESULT_SCHEMA };
   }
 
@@ -336,7 +391,7 @@
   // well on their own, and a free-form answer reads better than our template.
   function buildChatPrompt(words, language) {
     const lang = normalizeLanguage(language);
-    const list = words.map((w) => `${w.characters} (${w.readings[0]})`);
+    const list = words.map((w) => (w.readings.length ? `${w.characters} (${w.readings[0]})` : w.characters));
     const joined = list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}` : list[0];
     return `What's the difference between ${joined}? I'm an advanced learner of Japanese and keep mixing them up. Please answer in ${lang}.`;
   }
@@ -368,6 +423,7 @@
     if (words.length < 2) throw new Error('The model returned an incomplete comparison.');
     const scene = (obj.scene && typeof obj.scene === 'object') ? obj.scene : {};
     return {
+      relation: RELATIONS.includes(str(obj.relation).toLowerCase()) ? str(obj.relation).toLowerCase() : '',
       gist: str(obj.gist),
       words,
       scene: {
@@ -499,9 +555,9 @@
   if (typeof module === 'object' && module.exports) {
     module.exports = {
       PROMPT_VERSION, MAX_CANDIDATES, KS_MAX_GROUP_SIZE, RESULT_SCHEMA, PROVIDERS, ProviderError,
-      MAX_UNLEARNED, UNLEARNED_MIN_SCORE, EVERYDAY,
-      normalizeMeaning, meaningKeys, wordInfo, isLearned, buildIndex, findCandidates, markConfusion, highlightParts, cacheKey,
-      buildPrompt, buildChatPrompt, parseResult, buildRequest, parseResponse, friendlyError,
+      MAX_UNLEARNED, UNLEARNED_MIN_SCORE, EVERYDAY, RELATIONS,
+      normalizeMeaning, meaningKeys, wordInfo, isLearned, buildIndex, findCandidates, markConfusion, highlightParts, compareIds, cacheKey,
+      dictionaryWord, unknownWord, buildPrompt, buildChatPrompt, parseResult, buildRequest, parseResponse, friendlyError,
     };
     return;
   }
@@ -513,6 +569,7 @@
   const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const INDEX_TTL_MS = 15 * 60 * 1000;
   const KS_TIMEOUT_MS = 3000;
+  const DICTIONARY_TIMEOUT_MS = 8000;
   const DEFAULT_SETTINGS = { provider: 'gemini', keys: {}, models: {}, baseUrls: {}, language: 'English', kanjiSearch: true };
 
   // ---- settings (GM storage only; never logged) ----------------------------
@@ -575,6 +632,14 @@
       ksNotes.set(characters, note);
     }
     return ksNotes.get(characters);
+  }
+
+  // Resolves to a word, null (no match) or throws ProviderError (unreachable).
+  async function lookupDictionary(query) {
+    const url = `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(query)}`;
+    const r = await gmRequest({ url, timeout: DICTIONARY_TIMEOUT_MS }).promise;
+    if (r.status !== 200) throw new ProviderError(r.status, `Jisho answered HTTP ${r.status}`);
+    return dictionaryWord(safeJson(r.text), query);
   }
 
   let indexPromise = null;
@@ -645,6 +710,19 @@
     toast(`Cleared ${keys.length} cached comparisons.`);
   }
 
+  // ---- added words (per subject) ----------------------------------------------
+
+  // WK words are stored by id and re-read from the index; others as the full word.
+  function loadCustomWords(subjectId) {
+    const list = GM_getValue(`${CUSTOM_PREFIX}${subjectId}`, []);
+    return Array.isArray(list) ? list.filter((w) => typeof w === 'number' || (w && typeof w.id === 'string' && w.characters)) : [];
+  }
+
+  function saveCustomWords(subjectId, list) {
+    if (list.length) GM_setValue(`${CUSTOM_PREFIX}${subjectId}`, list);
+    else GM_deleteValue(`${CUSTOM_PREFIX}${subjectId}`);
+  }
+
   // ---- DOM helpers (text only: model output never becomes HTML) -------------
 
   function h(tag, attrs, ...children) {
@@ -711,34 +789,74 @@
   // ---- panel -----------------------------------------------------------------
 
   function createPanel(index, currentId, candidates) {
-    const selected = new Set([candidates[0].id]);
+    const extras = new Map(); // added words that are not on WK, by string id
+    const custom = loadCustomWords(currentId)
+      .map((stored) => {
+        if (typeof stored === 'number') return index.byId.has(stored) ? stored : null;
+        extras.set(stored.id, stored);
+        return stored.id;
+      })
+      .filter((id) => id != null && id !== currentId && !candidates.some((c) => c.id === id));
+    const selected = new Set([candidates.length ? candidates[0].id : custom[0]].filter((id) => id != null));
     let inflight = null;
+    let chips = [];
 
-    const chips = candidates.map((c) => {
+    const wordOf = (id) => (typeof id === 'number' ? wordInfo(index.byId.get(id)) : extras.get(id));
+
+    function chipFor(c) {
       const why = [
         c.shared.length ? `shares meaning: ${c.shared.join(', ')}` : '',
         c.ksGroupSize ? 'Kanji Search group' : '',
+        c.custom ? 'added by you' : '',
+        c.word.source === 'dictionary' ? 'not on WaniKani (Jisho)' : '',
+        c.word.source === 'unknown' ? 'not found in a dictionary' : '',
       ].filter(Boolean).join(' · ');
-      const chip = button(
+      const onWk = typeof c.id === 'number';
+      return button(
         [
           h('span', { lang: 'ja', class: 'wksw-chip-ja' }, c.word.characters),
           ' ',
-          h('span', { class: 'wksw-chip-meaning' }, c.word.meanings[0]),
-          !c.learned && h('span', { class: 'wksw-chip-level' }, `Lv ${c.word.level}`),
+          h('span', { class: 'wksw-chip-meaning' }, c.word.meanings[0] || '?'),
+          onWk && !c.learned && h('span', { class: 'wksw-chip-level' }, `Lv ${c.word.level}`),
         ],
         () => toggle(c.id),
         {
-          class: `wksw-btn wksw-chip${c.learned ? '' : ' wksw-unlearned'}${c.confused ? ' wksw-confused' : ''}`,
-          title: `${c.word.readings[0]} · ${why}${c.learned ? '' : ` · not learned yet (level ${c.word.level})`}`,
+          class: `wksw-btn wksw-chip${onWk && !c.learned ? ' wksw-unlearned' : ''}${c.confused ? ' wksw-confused' : ''}`,
+          title: [c.word.readings[0], why, onWk && !c.learned ? `not learned yet (level ${c.word.level})` : ''].filter(Boolean).join(' · '),
           'data-id': String(c.id),
         },
       );
-      return chip;
+    }
+
+    const addInput = h('input', { type: 'text', class: 'wksw-add', lang: 'ja', placeholder: '+ add a word', 'aria-label': 'Add a word to compare (Japanese or romaji)', title: 'Add a word to compare (Japanese or romaji)', autocomplete: 'off', spellcheck: 'false' });
+    // Keep WK's quiz hotkeys (and Enter = next item) out of the field.
+    for (const type of ['keydown', 'keyup', 'keypress']) addInput.addEventListener(type, (e) => e.stopPropagation());
+    addInput.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return; // Enter confirming an IME conversion
+      if (e.key === 'Enter') addWord(addInput.value);
+      if (e.key === 'Escape') addInput.blur();
     });
-    const firstUnlearned = candidates.findIndex((c) => !c.learned);
-    const chipRow = firstUnlearned > 0
-      ? [...chips.slice(0, firstUnlearned), h('span', { class: 'wksw-muted wksw-divider' }, 'not learned yet:'), ...chips.slice(firstUnlearned)]
-      : chips;
+
+    const chipBox = h('div', { class: 'wksw-chips' });
+    function renderChips() {
+      const learned = candidates.filter((c) => c.learned);
+      const unlearned = candidates.filter((c) => !c.learned);
+      const added = custom.map((id) => ({ id, learned: index.learned.has(id), shared: [], ksGroupSize: null, custom: true, word: wordOf(id) }));
+      const learnedChips = learned.map(chipFor);
+      const addedChips = added.map(chipFor);
+      const unlearnedChips = unlearned.map(chipFor);
+      chips = [...learnedChips, ...addedChips, ...unlearnedChips];
+      chipBox.replaceChildren(
+        !candidates.length && !custom.length && h('span', { class: 'wksw-muted wksw-divider' }, 'No similar words found.'),
+        learnedChips,
+        addedChips.map((chip, i) =>
+          h('span', { class: 'wksw-added' }, chip, button('×', () => removeWord(added[i].id), { class: 'wksw-btn wksw-remove', title: `Remove ${added[i].word.characters}`, 'aria-label': `Remove ${added[i].word.characters}` })),
+        ),
+        unlearnedChips.length && h('span', { class: 'wksw-muted wksw-divider' }, 'not learned yet:'),
+        unlearnedChips,
+        addInput,
+      );
+    }
 
     const status = h('div', { class: 'wksw-status', 'aria-live': 'polite' });
     const result = h('div', { class: 'wksw-result' });
@@ -750,7 +868,7 @@
       button([icon('chatgpt'), 'Ask ChatGPT'], askChat, { title: 'Copy the prompt and open ChatGPT (no API key needed)' }),
       button(icon('settings'), openSettings, { class: 'wksw-btn wksw-ghost', title: 'WaniKani Similar Words Explanation settings', 'aria-label': 'Settings' }),
     );
-    const mixup = candidates[0].confused;
+    const mixup = candidates[0] && candidates[0].confused;
     const hint = mixup && h(
       'p',
       { class: 'wksw-hint' },
@@ -760,11 +878,71 @@
       h('b', { lang: 'ja' }, candidates[0].word.characters),
       '.',
     );
-    const root = h('div', { class: 'wksw' }, hint, h('div', { class: 'wksw-chips' }, chipRow), actions, result, status);
+    const root = h('div', { class: 'wksw' }, hint, chipBox, actions, result, status);
 
     const language = () => normalizeLanguage(loadSettings().language);
     const selectedIds = () => [currentId, ...selected];
-    const words = () => selectedIds().map((id) => wordInfo(index.byId.get(id))).sort((a, b) => a.id - b.id);
+    const words = () => selectedIds().map(wordOf).sort((a, b) => compareIds(a.id, b.id));
+
+    function storeCustom() {
+      saveCustomWords(currentId, custom.map((id) => (typeof id === 'number' ? id : extras.get(id))));
+    }
+
+    function include(id, word) {
+      if (id === currentId) {
+        status.replaceChildren(`That's the word you're on.`);
+        return;
+      }
+      if (!candidates.some((c) => c.id === id) && !custom.includes(id)) {
+        if (word) extras.set(id, word);
+        custom.push(id);
+        storeCustom();
+        renderChips();
+      }
+      addInput.value = '';
+      addInput.blur();
+      status.replaceChildren();
+      if (!selected.has(id)) toggle(id);
+      else refresh();
+    }
+
+    // WK first (exact spelling), then Jisho, which also takes kana and romaji and
+    // may land back on a WK word (まじわる → 交わる).
+    async function addWord(text) {
+      const query = text.trim();
+      if (!query || inflight) return;
+      const onWk = (chars) => {
+        const ids = index.byChars.get(chars) || [];
+        return ids.find((id) => index.learned.has(id)) || ids[0];
+      };
+      const direct = onWk(query);
+      if (direct != null) return include(direct);
+      status.replaceChildren(h('span', { class: 'wksw-spinner' }), ` Looking up ${query}…`);
+      let found = null;
+      let failure = null;
+      try {
+        found = await lookupDictionary(query);
+      } catch (e) {
+        failure = e.message;
+      }
+      if (found) {
+        const wkId = onWk(found.characters);
+        return wkId != null ? include(wkId) : include(found.id, found);
+      }
+      const unknown = unknownWord(query);
+      status.replaceChildren(
+        failure ? `Could not look up ${query} (${failure}). ` : `${query} is not on WaniKani or Jisho. `,
+        button('Compare anyway', () => include(unknown.id, unknown)),
+      );
+    }
+
+    function removeWord(id) {
+      custom.splice(custom.indexOf(id), 1);
+      selected.delete(id);
+      storeCustom();
+      renderChips();
+      refresh();
+    }
 
     function toggle(id) {
       if (selected.has(id)) selected.delete(id);
@@ -777,7 +955,7 @@
 
     function refresh() {
       for (const chip of chips) {
-        const id = Number(chip.dataset.id);
+        const id = /^\d+$/.test(chip.dataset.id) ? Number(chip.dataset.id) : chip.dataset.id;
         chip.setAttribute('aria-pressed', String(selected.has(id)));
         chip.classList.toggle('wksw-cached', !!cachedEntry(cacheKey([currentId, id], language())));
       }
@@ -849,6 +1027,7 @@
     }
 
     function askChat() {
+      if (selected.size === 0) return;
       const prompt = buildChatPrompt(words(), language());
       GM_setClipboard(prompt, 'text');
       GM_openInTab(`https://chatgpt.com/?q=${encodeURIComponent(prompt)}`, { active: true, insert: true });
@@ -873,14 +1052,20 @@
         );
       };
       // Only words we actually compared get a link; the model may echo a variant spelling.
+      // Words not on WK link to Jisho.
       const title = (w) => {
         const word = h('span', { lang: 'ja', class: 'wksw-ja' }, w.word);
-        if (!entry.words.includes(w.word)) return word;
-        const href = `${location.origin}/vocabulary/${encodeURIComponent(w.word)}`;
-        return h('a', { href, target: '_blank', rel: 'noopener', class: 'wksw-word-link', title: `Open ${w.word} on WaniKani` }, word);
+        const at = entry.words.indexOf(w.word);
+        if (at < 0) return word;
+        const [href, site] = typeof entry.ids[at] === 'number'
+          ? [`${location.origin}/vocabulary/${encodeURIComponent(w.word)}`, 'WaniKani']
+          : [`https://jisho.org/search/${encodeURIComponent(w.word)}`, 'Jisho'];
+        return h('a', { href, target: '_blank', rel: 'noopener', class: 'wksw-word-link', title: `Open ${w.word} on ${site}` }, word);
       };
+      const RELATION_LABELS = { 'near-synonyms': 'Near-synonyms', related: 'Related, but not interchangeable', different: 'Different meanings' };
       const providerLabel = (PROVIDERS[entry.provider] || {}).label || entry.provider;
       result.replaceChildren(
+        r.relation && h('div', { class: `wksw-relation wksw-relation-${r.relation}` }, RELATION_LABELS[r.relation]),
         r.gist && h('p', { class: 'wksw-gist' }, r.gist),
         h(
           'div',
@@ -923,6 +1108,7 @@
       );
     }
 
+    renderChips();
     refresh();
     return root;
   }
@@ -957,7 +1143,7 @@
     const ksNote = settings.kanjiSearch ? await withTimeout(fetchKanjiSearchNote(state.characters), KS_TIMEOUT_MS) : null;
     const typed = reviewAnswer(state);
     const candidates = markConfusion(index, state.id, findCandidates(index, state.id, ksNote), typed && typed.answer, typed && typed.questionType);
-    return candidates.length ? createPanel(index, state.id, candidates) : null;
+    return createPanel(index, state.id, candidates); // even with no candidates: you can still add words
   }
 
   // ---- settings dialog ---------------------------------------------------------
@@ -1119,6 +1305,17 @@
     .wksw-unlearned[aria-pressed="true"] { opacity: 1; }
     .wksw-chip-level { font-size: 11px; margin-left: 4px; opacity: 0.7; }
     .wksw-divider { align-self: center; margin-left: 4px; }
+    .wksw-added { display: inline-flex; }
+    .wksw-added .wksw-chip { border-top-right-radius: 0; border-bottom-right-radius: 0; border-style: dotted; }
+    .wksw-remove { border-left: none; border-top-left-radius: 0; border-bottom-left-radius: 0; border-style: dotted; padding: 3px 7px; opacity: 0.7; }
+    .wksw-remove:hover { opacity: 1; }
+    .wksw-chips .wksw-add { font: inherit; font-size: 14px; color: inherit; background: transparent; width: 8.5em; margin: 0; height: auto; box-shadow: none;
+      border: 1px dashed color-mix(in srgb, currentColor 30%, transparent); border-radius: 6px; padding: 3px 10px; }
+    .wksw-chips .wksw-add:focus { outline: none; border-style: solid; border-color: #a100f1; }
+    .wksw-relation { display: inline-block; margin: 16px 0 -8px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
+      border: 1px solid color-mix(in srgb, currentColor 30%, transparent); }
+    .wksw-relation-related { border-color: #e69500; color: #b36b00; }
+    .wksw-relation-different { border-color: #d0021b; color: #d0021b; }
     .wksw-hint { margin: 0 0 8px; padding: 4px 10px; border-left: 3px solid #a100f1; }
     .wksw-note { margin: 4px 0 6px; }
     .wksw-expressions { list-style: none; margin: 0; padding: 0; }

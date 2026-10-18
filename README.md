@@ -2,6 +2,7 @@
 
 A Tampermonkey userscript for [WaniKani](https://www.wanikani.com). For the vocab item you're looking at, it lists words **you have already learned** that are easy to confuse with it (必要 / 重要, 思う / 考える, 上る / 登る …). When you click, it asks an LLM how they differ and shows a short, consistently structured answer inside the item info:
 
+- how close the words really are: near-synonyms, related but not interchangeable, or different meanings
 - a one-sentence gist that contrasts all the words at once, and says so plainly when the real difference is formality (everyday vs formal, written or literary)
 - for each word:
   - reading and a short gloss
@@ -23,6 +24,12 @@ It combines two sources:
 2. **[Kanji Search](https://www.kanjisearch.com) groups.** These are hand-curated groups of related words from [Kanji Search Notes](https://greasyfork.org/scripts/444554-kanji-search-notes) by Mark Hennessy. They catch near-synonyms whose English glosses differ, such as 思う / 考える. Large enumerations (numbers, planets, days) are skipped. You can turn this source off in Settings.
 
 Up to 8 learned candidates appear as chips. Up to 4 strong matches you **haven't learned yet** follow them, with a dashed outline and their level; they can be compared too. Pick one to three, then click **Explain the difference**. A dot on a chip means that pair is already cached.
+
+### Add your own words
+
+Type a word in the **+ add a word** field after the chips and press Enter. You can type kanji, kana or romaji. The script looks the word up on WaniKani first, then on [Jisho](https://jisho.org), so it can be a word WaniKani doesn't teach. A typed reading leads back to the WaniKani word (まじわる → 交わる). If neither knows the word, you can still **Compare anyway**; the answer will say if it isn't a real word and suggest what you probably meant. Added words are saved for that item, so they're there the next time you open it. Click **×** to remove one.
+
+Since an added word can be anything, every answer starts by saying how close the words are. When they mean different things, the comparison says so instead of inventing a contrast.
 
 If you get a review wrong by typing another learned word's meaning or reading ("early" for 速い), that word is listed first and pre-selected, with a line saying whose answer you gave.
 
@@ -53,12 +60,13 @@ Your API key stays in Tampermonkey's storage. It is never logged, and it is sent
 
 - **To the LLM provider:** the characters, readings, WaniKani meanings and part of speech of the words you compare. Nothing else is sent: no mnemonics, no account data.
 - **To kanjisearch.com** (if enabled): the characters of the current word.
+- **To jisho.org:** a word you add yourself, only when it isn't on WaniKani.
 - **To WaniKani:** your item data is read through the WaniKani Open Framework, which handles the API token.
 - **Never:** no tracking, no analytics, no server of ours.
 
 ## Cache
 
-Each answer is stored in Tampermonkey storage, keyed by the set of WaniKani subject IDs, the output language and the prompt version. Order doesn't matter. Changing the prompt version invalidates old answers. Switching provider does not; use Regenerate for that. Settings → Export / Import / Clear manages it.
+Each answer is stored in Tampermonkey storage, keyed by the set of WaniKani subject IDs (or, for added words not on WaniKani, the word itself), the output language and the prompt version. Order doesn't matter. Changing the prompt version invalidates old answers. Switching provider does not; use Regenerate for that. Settings → Export / Import / Clear manages it.
 
 ## Development
 

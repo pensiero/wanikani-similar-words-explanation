@@ -83,6 +83,17 @@ test('findCandidates merges Kanji Search groups and ignores enumerations', () =>
   assert.equal(both[0].id, 1);
 });
 
+test('findCandidates sizes a Kanji Search group by its entries on WK only', () => {
+  // The 交/混 family: 7 entries, but 交わす is not on WK, so it is a group of 6, not an enumeration.
+  const family = ['交ぜる', '交じる', '交わる', '混ぜる', '混じる', '混ざる'];
+  const index = core.buildIndex(family.map((c, i) => vocab(100 + i, c, [`Meaning ${i}`])));
+  const entries = family.map((characters) => ({ characters, metadata: {} }));
+  entries.splice(2, 0, { characters: '交わす', metadata: { notOnWk: true } });
+  const cands = core.findCandidates(index, 105, { groups: [{ entries }] });
+  assert.ok(cands.some((c) => c.id === 102), '混ざる lists 交わる');
+  assert.equal(cands[0].ksGroupSize, 6);
+});
+
 test('findCandidates lists strong unlearned words after the learned ones', () => {
   const index = core.buildIndex(items);
   const ks = { groups: [{ entries: ['必要', '不可欠', '重要'].map((characters) => ({ characters, metadata: {} })) }] };
@@ -132,6 +143,37 @@ test('cacheKey is order-independent and versioned', () => {
   assert.notEqual(core.cacheKey([1, 2], 'English'), core.cacheKey([1, 2], 'Italian'));
 });
 
+test('cacheKey and compareIds mix WK ids with added words', () => {
+  assert.deepEqual([2, 'x:交わす', 1, 'x:あ'].sort(core.compareIds), [1, 2, 'x:あ', 'x:交わす']);
+  assert.equal(core.cacheKey(['x:交わす', 2], 'English'), core.cacheKey([2, 'x:交わす'], 'English'));
+  assert.match(core.cacheKey([2, 'x:交わす'], 'English'), /:2-x:交わす$/);
+});
+
+test('dictionaryWord keeps exact matches only, except for romaji', () => {
+  const jisho = (word, reading, defs, pos = ['Godan verb']) => ({ japanese: [{ word, reading }], senses: [{ english_definitions: defs, parts_of_speech: pos }] });
+  const kawasu = { data: [jisho('交わす', 'かわす', ['to exchange', 'to cross', 'to intersect'])] };
+  assert.deepEqual(core.dictionaryWord(kawasu, '交わす'), {
+    id: 'x:交わす', characters: '交わす', readings: ['かわす'], meanings: ['to exchange', 'to cross'], partsOfSpeech: ['Godan verb'], level: null, source: 'dictionary',
+  });
+  assert.equal(core.dictionaryWord(kawasu, 'かわす').characters, '交わす', 'kana finds the kanji form');
+  assert.equal(core.dictionaryWord(kawasu, 'kawasu').characters, '交わす', 'romaji trusts the top hit');
+  assert.equal(core.dictionaryWord({ data: [jisho('負', 'ふ', ['negative'])] }, 'ふがくくっ'), null, 'a loose match is not a match');
+  assert.equal(core.dictionaryWord(null, 'x'), null);
+  const wiki = { data: [{ japanese: [{ word: '交わす', reading: 'かわす' }], senses: [{ english_definitions: ['Wiki'], parts_of_speech: ['Wikipedia definition'] }, { english_definitions: ['to exchange'], parts_of_speech: [] }] }] };
+  assert.deepEqual(core.dictionaryWord(wiki, '交わす').meanings, ['to exchange']);
+});
+
+test('buildPrompt describes added words and flags unknown ones', () => {
+  const kawasu = { id: 'x:交わす', characters: '交わす', readings: ['かわす'], meanings: ['to exchange'], partsOfSpeech: ['Godan verb'], level: null, source: 'dictionary' };
+  const known = core.buildPrompt([core.wordInfo(items[0]), kawasu], 'English');
+  assert.match(known.user, /交わす \(かわす\): not on WaniKani; dictionary meanings: to exchange; part of speech: Godan verb/);
+  assert.doesNotMatch(known.user, /may be a typo/);
+  const odd = core.buildPrompt([core.wordInfo(items[0]), core.unknownWord(' ふがく ')], 'English');
+  assert.match(odd.user, /- ふがく: not found on WaniKani or in a dictionary/);
+  assert.match(odd.user, /may be a typo/);
+  assert.equal(core.buildChatPrompt([core.wordInfo(items[0]), core.unknownWord('ふがく')], 'English').includes('and ふがく?'), true);
+});
+
 test('buildPrompt grounds readings and meanings and sets the language', () => {
   const words = [items[0], items[1]].map(core.wordInfo);
   const p = core.buildPrompt(words, 'Italian');
@@ -146,6 +188,7 @@ test('buildPrompt grounds readings and meanings and sets the language', () => {
 
 test('parseResult accepts fenced JSON, coerces and drops empty bits', () => {
   const raw = '```json\n' + JSON.stringify({
+    relation: 'Related',
     gist: '必要 is needed, 重要 matters.',
     words: [
       { word: '必要', reading: 'ひつよう', gloss: 'needed', register: 'Neutral', everyday: 'Very common', note: 'Requirement.', example: { ja: '傘が**必要**だ。', en: 'I need an umbrella.' }, expressions: [{ ja: '必要不可欠', en: 'indispensable' }, { ja: '', en: 'x' }, { ja: 'a', en: '' }, { ja: 'b', en: '' }, { ja: 'c', en: '' }] },
@@ -155,6 +198,8 @@ test('parseResult accepts fenced JSON, coerces and drops empty bits', () => {
   }) + '\n```';
   const r = core.parseResult(raw);
   assert.equal(r.gist, '必要 is needed, 重要 matters.');
+  assert.equal(r.relation, 'related');
+  assert.equal(core.parseResult('{"relation":"cousins","words":[{"word":"a"},{"word":"b"}]}').relation, '');
   assert.equal(r.words[0].register, 'neutral');
   assert.equal(r.words[0].everyday, 'very common');
   assert.deepEqual(r.words[0].example, { ja: '傘が**必要**だ。', en: 'I need an umbrella.' });

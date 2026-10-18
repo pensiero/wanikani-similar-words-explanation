@@ -21,12 +21,13 @@ test('every GM_ function used is granted, and nothing extra', () => {
   assert.deepEqual([...used].sort(), [...granted].sort());
 });
 
-test('every built-in provider host and Kanji Search are in @connect', () => {
+test('every built-in provider host, Kanji Search and Jisho are in @connect', () => {
   const connect = new Set(meta('connect'));
   for (const p of Object.values(core.PROVIDERS)) {
     if (p.baseUrl) assert.ok(connect.has(new URL(p.baseUrl).hostname), `missing @connect ${new URL(p.baseUrl).hostname}`);
   }
   assert.ok(connect.has('www.kanjisearch.com'));
+  assert.ok(connect.has('jisho.org'));
   assert.ok(!connect.has('*'), 'no wildcard @connect');
 });
 
